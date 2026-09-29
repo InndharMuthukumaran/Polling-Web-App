@@ -164,4 +164,21 @@ This section captures assumptions and design decisions made for Part 2B (FastAPI
   - Any unhandled exception triggers an immediate `session.rollback()`.
   - Sessions are unconditionally closed in a `finally` block upon request completion, ensuring PostgreSQL row locks (such as `SELECT ... FOR UPDATE` during voting and claim operations) are never left hanging.
 
+# Assumptions and Design Decisions (Part 2C: Race Condition, Privacy, and Default Fixes)
+
+This section captures the three targeted fixes applied following review of Part 2B.
+
+## 1. Concurrency: Preventing Stale Reads on Closed Polls
+- **Problem**: When a poll instance had already been loaded into a session's identity map (such as during request dependency evaluation), a concurrent call to `close_poll` in another transaction would commit `status = 'closed'` to the database. While a subsequent `SELECT ... FOR UPDATE` in `cast_vote` or `remove_vote` waited for the lock and saw the updated row on PostgreSQL, SQLAlchemy's default behavior retained the already-loaded `Poll` object with its stale `status == 'open'`, permitting post-closure votes.
+- **Resolution**: Both `cast_vote` and `remove_vote` apply `.execution_options(populate_existing=True)` to `select(Poll).where(Poll.id == pid).with_for_update()`. This forces SQLAlchemy to refresh the loaded object's attributes from the freshly locked row, reliably raising `PollClosedError` when a poll has been closed.
+
+## 2. Privacy: Redacting Group Names from 403 Forbidden Errors
+- **Problem**: Previously, when an admin token belonging to another group was presented, the 403 error message disclosed both the caller's group name and the target group name, allowing token holders to enumerate group names by ID.
+- **Resolution**: `require_admin_for_group` and `require_admin_for_poll` now return a static error message: `"This admin token is not valid for this group."`. No group names, group IDs, or poll details are leaked in forbidden responses.
+
+## 3. Schema: Completion Time Mode Default and Validation
+- **Problem**: `PollCreate` in `app/api/schemas.py` previously defaulted `completion_time_mode` to `"first"`, contradicting the agreed service default (`"last"`, evaluating completion when a member settles on the target) and allowed arbitrary strings.
+- **Resolution**: `PollCreate.completion_time_mode` now defaults to `"last"` and is typed as `Literal["first", "last"]`, ensuring strict 422 rejection for invalid modes.
+
+
 

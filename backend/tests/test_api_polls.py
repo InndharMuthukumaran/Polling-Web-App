@@ -392,3 +392,59 @@ def test_poll_status_lateness(client):
 
     assert len(st["at_target"]) == 1
     assert st["at_target"][0]["late"] is True
+
+
+def test_poll_completion_time_mode_defaults_and_validation(client):
+    """
+    Assert that PollCreate defaults completion_time_mode to 'last',
+    respects explicit 'first', and rejects invalid values like 'whenever' with 422.
+    """
+    g = client.post("/api/v1/groups", json={"name": "Completion Time Mode Group"}).json()
+    gid = g["group_id"]
+    admin_tok = g["admin_token"]
+
+    base_options = [
+        {"label": "Target", "role": "target"},
+        {"label": "Not Yet", "role": "not_yet"},
+    ]
+
+    # 1. Create a poll without sending completion_time_mode -> asserts response says 'last'
+    res_default = client.post(
+        f"/api/v1/groups/{gid}/polls",
+        headers={"X-Admin-Token": admin_tok},
+        json={
+            "name": "Default Mode Poll",
+            "allow_multiple": False,
+            "options": base_options,
+        },
+    )
+    assert res_default.status_code == 201
+    assert res_default.json()["completion_time_mode"] == "last"
+
+    # 2. Create a poll with 'first' -> asserts response says 'first'
+    res_first = client.post(
+        f"/api/v1/groups/{gid}/polls",
+        headers={"X-Admin-Token": admin_tok},
+        json={
+            "name": "First Mode Poll",
+            "allow_multiple": False,
+            "options": base_options,
+            "completion_time_mode": "first",
+        },
+    )
+    assert res_first.status_code == 201
+    assert res_first.json()["completion_time_mode"] == "first"
+
+    # 3. Create a poll with invalid 'whenever' -> returns 422
+    res_invalid = client.post(
+        f"/api/v1/groups/{gid}/polls",
+        headers={"X-Admin-Token": admin_tok},
+        json={
+            "name": "Invalid Mode Poll",
+            "allow_multiple": False,
+            "options": base_options,
+            "completion_time_mode": "whenever",
+        },
+    )
+    assert res_invalid.status_code == 422
+

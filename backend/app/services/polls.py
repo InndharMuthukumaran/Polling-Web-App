@@ -294,7 +294,7 @@ def cast_vote(
     oid = resolve_uuid(option_id)
 
     poll = session.scalar(
-        select(Poll).where(Poll.id == pid).with_for_update()
+        select(Poll).where(Poll.id == pid).with_for_update().execution_options(populate_existing=True)
     )
     if not poll:
         raise PollNotFoundError(f"Poll {pid} not found.")
@@ -396,7 +396,7 @@ def remove_vote(
     mid = resolve_uuid(member_id)
 
     poll = session.scalar(
-        select(Poll).where(Poll.id == pid).with_for_update()
+        select(Poll).where(Poll.id == pid).with_for_update().execution_options(populate_existing=True)
     )
     if not poll:
         raise PollNotFoundError(f"Poll {pid} not found.")

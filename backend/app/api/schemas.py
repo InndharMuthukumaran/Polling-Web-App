@@ -1,6 +1,7 @@
 """Pydantic v2 request and response models for the Polling API."""
 
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -141,7 +142,7 @@ class PollCreate(BaseModel):
     allow_multiple: bool
     options: list[PollOptionCreate] = Field(..., min_length=2)
     deadline: datetime | None = None
-    completion_time_mode: str = "first"
+    completion_time_mode: Literal["first", "last"] = "last"
 
 
 class PollOptionDetail(BaseModel):

@@ -730,3 +730,89 @@ def test_13_concurrent_votes_single_choice(test_engine):
             for table in reversed(Base.metadata.sorted_tables):
                 conn.execute(table.delete())
 
+
+# ---------------------------------------------------------------------------
+# Test 14: Vote rejected when poll closed after it was loaded (stale read fix)
+# ---------------------------------------------------------------------------
+def test_vote_rejected_when_poll_closed_after_it_was_loaded(test_engine):
+    """
+    Verify that cast_vote and remove_vote reload the poll with populate_existing=True,
+    rejecting operations with PollClosedError when closed concurrently after being loaded.
+    """
+    from sqlalchemy.orm import sessionmaker
+    from app.db import Base
+    from app.models import Poll
+
+    session_factory = sessionmaker(bind=test_engine, autocommit=False, autoflush=False)
+
+    try:
+        # Case 1: cast_vote after poll was closed
+        with session_factory() as setup_session:
+            group = create_group(setup_session, "Race Group")
+            member = add_member(setup_session, group.id, "Alice")
+            poll = create_poll(
+                setup_session,
+                group_id=group.id,
+                name="Race Poll",
+                allow_multiple=False,
+                options=[
+                    PollOptionInput(label="Yes", role="target"),
+                    PollOptionInput(label="No", role="not_yet"),
+                ],
+            )
+            group_id = group.id
+            poll_id = poll.id
+            member_id = member.id
+            opt_id = poll.options[0].id
+
+        # Session A loads poll and asserts status is open
+        session_a = session_factory()
+        poll_a = session_a.get(Poll, poll_id)
+        assert poll_a.status == "open"
+
+        # Session B closes the poll
+        with session_factory() as session_b:
+            close_poll(session_b, poll_id)
+
+        # Session A calls cast_vote -> must raise PollClosedError
+        with pytest.raises(PollClosedError):
+            cast_vote(session_a, poll_id, member_id, opt_id)
+        session_a.close()
+
+        # Case 2: remove_vote after poll was closed
+        # Setup open poll with a vote already cast
+        with session_factory() as setup_session_2:
+            poll_2 = create_poll(
+                setup_session_2,
+                group_id=group_id,
+                name="Race Poll 2",
+                allow_multiple=False,
+                options=[
+                    PollOptionInput(label="A", role="target"),
+                    PollOptionInput(label="B", role="not_yet"),
+                ],
+            )
+            poll_2_id = poll_2.id
+            opt_2_id = poll_2.options[0].id
+            cast_vote(setup_session_2, poll_2_id, member_id, opt_2_id)
+
+        # Session A loads poll 2 and asserts status is open
+        session_a_2 = session_factory()
+        poll_a_2 = session_a_2.get(Poll, poll_2_id)
+        assert poll_a_2.status == "open"
+
+        # Session B closes poll 2
+        with session_factory() as session_b_2:
+            close_poll(session_b_2, poll_2_id)
+
+        # Session A calls remove_vote -> must raise PollClosedError
+        with pytest.raises(PollClosedError):
+            remove_vote(session_a_2, poll_2_id, member_id, opt_2_id)
+        session_a_2.close()
+
+    finally:
+        with test_engine.begin() as conn:
+            for table in reversed(Base.metadata.sorted_tables):
+                conn.execute(table.delete())
+
+

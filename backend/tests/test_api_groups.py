@@ -174,3 +174,65 @@ def test_member_and_admin_token_separation(client):
     )
     assert member_call_with_admin_token.status_code == 401
     assert member_call_with_admin_token.json()["error"]["code"] == "invalid_token"
+
+
+def test_admin_forbidden_error_does_not_leak_group_names(client):
+    """
+    Assert 403 forbidden error message does not leak group names or IDs
+    for group and poll admin endpoints called with another group's admin token.
+    """
+    name_a = "SecretGroupAlpha_SpecialKeyword123"
+    name_b = "ConfidentialGroupBeta_SpecialKeyword456"
+
+    # Create Group A
+    res_a = client.post("/api/v1/groups", json={"name": name_a})
+    data_a = res_a.json()
+    group_a_id = data_a["group_id"]
+    admin_token_a = data_a["admin_token"]
+
+    # Create Group B
+    res_b = client.post("/api/v1/groups", json={"name": name_b})
+    data_b = res_b.json()
+    admin_token_b = data_b["admin_token"]
+
+    # 1. Call GET /api/v1/groups/{group_a_id} with Group B's admin token
+    res_group = client.get(
+        f"/api/v1/groups/{group_a_id}",
+        headers={"X-Admin-Token": admin_token_b},
+    )
+    assert res_group.status_code == 403
+    group_err = res_group.json()["error"]
+    assert group_err["code"] == "forbidden"
+    assert group_err["message"] == "This admin token is not valid for this group."
+    # Assert neither group name appears anywhere in response
+    assert name_a not in res_group.text
+    assert name_b not in res_group.text
+
+    # Create a poll in Group A
+    poll_res = client.post(
+        f"/api/v1/groups/{group_a_id}/polls",
+        headers={"X-Admin-Token": admin_token_a},
+        json={
+            "name": "SecretPoll_Keyword789",
+            "allow_multiple": False,
+            "options": [
+                {"label": "Opt 1", "role": "target"},
+                {"label": "Opt 2", "role": "not_yet"},
+            ],
+        },
+    )
+    poll_id = poll_res.json()["id"]
+
+    # 2. Call GET /api/v1/polls/{poll_id}/status with Group B's admin token
+    res_poll = client.get(
+        f"/api/v1/polls/{poll_id}/status",
+        headers={"X-Admin-Token": admin_token_b},
+    )
+    assert res_poll.status_code == 403
+    poll_err = res_poll.json()["error"]
+    assert poll_err["code"] == "forbidden"
+    assert poll_err["message"] == "This admin token is not valid for this group."
+    assert name_a not in res_poll.text
+    assert name_b not in res_poll.text
+    assert "SecretPoll_Keyword789" not in res_poll.text
+

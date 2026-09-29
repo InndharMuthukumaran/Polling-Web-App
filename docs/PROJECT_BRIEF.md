@@ -1,6 +1,6 @@
 # Project Brief: Advanced Group Polling (working title)
 
-Version 3. Last updated: 29 Sep 2026. Status: Part 1 built and verified; Part 2A and 2B prompts ready.
+Version 5. Last updated: 29 Sep 2026. Status: Parts 1, 2A and 2B built and verified; Part 2C (three small fixes) and Part 3A/3B (web app) prompts ready.
 
 ## 0. How Claude should use this document
 
@@ -66,16 +66,17 @@ Example: the goal is to complete an assignment. Option 1 "Yes" is the target, op
 **Platforms**
 - Must work for WhatsApp through a workaround, and also for other chat apps. Built as one shared core with a connector per platform.
 - WhatsApp approach: shared link. The poll lives on a lightweight page, the creator posts the link into the group, members tap it and vote there. Reminders are copy-and-paste text (no WhatsApp approval needed). Cost: one extra tap for members.
-- Native bots for Telegram and Discord.
+- Native bots for Telegram and Discord. Inndhar's view (29 Sep): native, in-chat polling holds more value than dashboard-only management. Agreed split: in the chat apps, creators create polls, members vote, the creator asks for the defaulter list (reply visible only to the creator) and reminders are posted natively; the web app handles the heavy work (member list setup, settings, per-person history, export) and is the only full route for WhatsApp.
 
 **Tech stack**
-- Frontend: Vite + Tailwind. Backend: FastAPI (Python). Database: PostgreSQL on a non-expiring free host (not MongoDB Atlas).
+- Frontend: React with Vite and Tailwind (confirmed 29 Sep). Backend: FastAPI (Python). Database: PostgreSQL on a non-expiring free host (not MongoDB Atlas).
 - LLM: a free Gemini API key for now.
 - Deployment for now: Vercel (frontend) and Render (backend).
 
 ## 4. Proposed (Claude's suggestions, not yet confirmed)
 
-- React as the UI library on top of Vite and Tailwind (assumed, never explicitly confirmed).
+- Frontend details chosen by Claude: TypeScript, Tailwind v4 through the Vite plugin, React Router, Vitest for tests, no other UI or state libraries. Member tokens and admin tokens are kept in the browser's local storage.
+- In Telegram and Discord, members are already identified by the platform, so name-claiming can be one tap. This needs new backend pieces (step 5 below): a trusted credential for the bot, links between a chat and a group and between a platform user and a member, and a way to send reminders through the bot. Telegram and Discord also have their own native poll objects, but they may limit the number of options or need a permanent connection; check current rules before the bot prompts, and consider buttons in a normal message instead. Do not post the defaulter list to the whole group by default.
 - Database host: Neon (plain Postgres, free, no card, scales to zero). Use two databases or branches, one for the app and one for tests.
 - Render free tier sleeps after 15 minutes, so use an external timer (UptimeRobot, cron-job.org or similar) calling a "send due reminders" address every 5 minutes. This keeps the server awake and drives reminders, with the database as the source of truth for what is due; missed reminders go out on the next tick. Move to a paid always-on backend before real users.
 - No Redis in the first version. Write the reminder code as a self-contained piece so a queue can be added later.
@@ -99,26 +100,28 @@ Example: the goal is to complete an assignment. Option 1 "Yes" is the target, op
 ## 5. Build parts (proposed order)
 
 1. Data and rules engine: tables, voting and history rules, defaulter lists, lateness, closing, tests. No API or UI. DONE (built, cleaned up, verified on PostgreSQL: 13 tests).
-2A. Identity layer: admin and member tokens, join codes, name claiming with approve and reset, member management, migration and tests. No HTTP. Prompt ready (part-2a-prompt.md).
-2B. HTTP API: FastAPI endpoints for groups, members, joining, polls, voting, status and history, with error handling and tests. Prompt ready (part-2b-prompt.md). Run after 2A is reviewed.
-3. Web app: the vote page opened from a link (the WhatsApp route) and the creator dashboard (defaulter lists, history, close button).
-4. Reminders and AI: the external timer, due-reminder logic, description refining with confirmation, personalised messages, template fallback, quiet hours, the "everyone reached the target" notice, languages.
-5. Telegram bot.
-6. Discord bot.
-7. Finishing: export, recurring polls, paid hosting switch, privacy text.
+2A. Identity layer: admin and member tokens, join codes, name claiming with approve and reset, member management, migration and tests. No HTTP. DONE (verified: 24 tests).
+2B. HTTP API: FastAPI endpoints for groups, members, joining, polls, voting, status and history, with error handling and tests. DONE (22 endpoints, verified end to end on a running server: 39 tests).
+2C. Three small fixes found in review: a vote could be accepted in the instant after a poll was closed (stale read), a 403 message revealed group names, and the API defaulted the deadline-time mode to "first" instead of the agreed "last". Prompt ready (part-2c-prompt.md).
+3A. Web app, member side: React foundation, API client, the join page and the shared poll page (claim a name, vote, see your own history). Prompt ready (part-3a-prompt.md).
+3B. Web app, creator side: create a group, member list management, create a poll, poll page with defaulter lists, history, share text and the close button. Prompt ready (part-3b-prompt.md). Run after 3A is reviewed.
+4. Reminders and AI: the external timer, due-reminder logic, description refining with confirmation, personalised messages, template fallback, quiet hours, the "everyone reached the target" notice, languages. Copy-paste text for WhatsApp.
+5. Bot support in the backend (new): bot credential, chat-to-group and platform-user-to-member links, outgoing messages.
+6. Telegram bot: native creation, voting, private defaulter list.
+7. Discord bot.
+8. Finishing: export, recurring polls, paid hosting switch, privacy text.
 
-The web app comes before the bots in this order because creators need the dashboard on every platform. Not yet confirmed.
+Order confirmed by Inndhar on 29 Sep. The web app comes first because it is the only full route for WhatsApp, lets Inndhar try the whole flow, and the bots sit on the same API.
 
 ## 6. Open questions
 
 1. Is one extra tap (link voting) acceptable, or must the experience feel fully native from the start?
 2. Which group type is first: classrooms, project teams, clubs, or study/fitness groups?
 3. Confirm or change the default rules listed at the end of section 4 and the Part 2 identity mechanics.
-4. Confirm the part order in section 5 (web app before bots), and React.
-5. Should creators manage polls in the web dashboard, inside Telegram and Discord, or both?
-6. Data retention and deletion rules for history and member lists.
-7. What happens if a creator loses the admin token (no recovery exists yet), and how a second admin is added (they would have to share the token for now).
-8. Is it acceptable that a poll link also lets a visitor join the group?
+4. Data retention and deletion rules for history and member lists.
+5. What happens if a creator loses the admin token (no recovery exists yet), and how a second admin is added (they would have to share the token for now).
+6. Is it acceptable that a poll link also lets a visitor join the group?
+7. The API does not return option roles after a poll is created, so the creator's poll page cannot show which options count as the target. Add an endpoint later if wanted.
 
 ## 7. Platform and hosting notes (as of Sep 2026, verify before relying)
 
@@ -155,3 +158,6 @@ The web app comes before the bots in this order because creators need the dashbo
 - 2026-09-29: ideation and feasibility finished. Decisions in section 3 confirmed, including the multiple-choice toggle, Postgres on a free non-expiring host, and building with a coding agent. Part 1 prompt written. Nothing built.
 - 2026-09-29: Part 1 built by the coding agent, reviewed by Claude, and cleaned up (tests now run only on PostgreSQL, row lock added for concurrent votes). Verified: migration works on an empty database and all 13 tests pass on a real PostgreSQL server. Repo: github.com/InndharMuthukumaran/Polling-Web-App.
 - 2026-09-29: Identity approach confirmed. Part 2 split into 2A (identity layer) and 2B (HTTP API); both prompts written.
+- 2026-09-29: Part 2A built and reviewed: migration works on empty and populated databases, 24 tests pass, no plain tokens stored.
+- 2026-09-29: Part 2B built and reviewed: 39 tests pass, full flow verified on a running server (create group, add members, claim, vote, status, history, close, permission checks, CORS). Review found two small issues, fixed by the Part 2C prompt.
+- 2026-09-29: Review of Part 2B found a third small issue (API default for the deadline-time mode) and it was added to the 2C prompt. Native in-chat polling agreed as the direction for the bots; part order updated and confirmed; React with Vite and Tailwind confirmed. Part 3 split into 3A and 3B; prompts written.

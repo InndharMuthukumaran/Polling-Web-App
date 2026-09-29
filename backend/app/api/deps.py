@@ -74,9 +74,7 @@ def require_admin_for_group(
             select(Group).where(Group.admin_token_hash == hashed)
         )
         if other_group:
-            raise PermissionDeniedError(
-                f"Admin token belongs to group '{other_group.name}', not group '{group.name}'."
-            )
+            raise PermissionDeniedError("This admin token is not valid for this group.")
         raise InvalidTokenError("Invalid admin token.")
 
     return group
@@ -113,7 +111,7 @@ def require_admin_for_poll(
             select(Group).where(Group.admin_token_hash == hashed)
         )
         if other_group:
-            raise PermissionDeniedError("Admin token belongs to a different group.")
+            raise PermissionDeniedError("This admin token is not valid for this group.")
         raise InvalidTokenError("Invalid admin token.")
 
     return poll, group
