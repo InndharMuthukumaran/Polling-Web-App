@@ -9,6 +9,10 @@ dependencies = [
     "alembic>=1.13.0",
     "psycopg[binary]>=3.1.0",
     "pydantic-settings>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
     "pytest>=8.0.0",
 ]
 
@@ -16,3 +20,8 @@ dependencies = [
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-v"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+exclude = ["alembic*", "tests*"]

@@ -149,3 +149,4 @@ The web app comes before the bots in this order because creators need the dashbo
 ## 10. Status log
 
 - 2026-09-29: ideation and feasibility finished. Decisions in section 3 confirmed, including the multiple-choice toggle, Postgres on a free non-expiring host, and building with a coding agent. Part 1 prompt written. Nothing built.
+- Part 1 built (schema, rules engine, 12 passing tests on PostgreSQL). Cleanup pass done.

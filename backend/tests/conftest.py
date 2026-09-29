@@ -3,65 +3,66 @@
 import os
 from pathlib import Path
 import pytest
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from alembic import command
 from alembic.config import Config
+from app.config import settings
 from app.db import Base
-from app.models import Group, Member, Poll, PollOption, Vote, VoteHistory
 
 
-def get_test_engine():
-    """Determine test database engine using TEST_DATABASE_URL or in-memory fallback."""
+def pytest_configure(config):
+    """Validate that TEST_DATABASE_URL is properly configured before running tests."""
     test_db_url = os.environ.get("TEST_DATABASE_URL")
+    if not test_db_url:
+        pytest.exit(
+            "TEST_DATABASE_URL is not set. Tests require a PostgreSQL test database.",
+            returncode=1,
+        )
 
-    if test_db_url:
-        try:
-            engine = create_engine(test_db_url, echo=False)
-            with engine.connect() as conn:
-                pass
-            return engine, test_db_url
-        except Exception:
-            pass
-
-    # Hermetic in-memory SQLite database with StaticPool
-    fallback_url = "sqlite+pysqlite:///:memory:"
-    from sqlalchemy.pool import StaticPool
-    engine = create_engine(
-        fallback_url,
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-        echo=False,
-    )
-    return engine, fallback_url
+    app_db_url = os.environ.get("DATABASE_URL", settings.database_url)
+    if test_db_url == app_db_url:
+        pytest.exit(
+            "TEST_DATABASE_URL must not be the same as DATABASE_URL. Test cleanup deletes all rows.",
+            returncode=1,
+        )
 
 
 @pytest.fixture(scope="session")
 def test_engine_and_url():
-    """Create test engine and apply Alembic migrations to head."""
-    engine, db_url = get_test_engine()
+    """Create test engine and apply Alembic migrations to head on PostgreSQL."""
+    test_db_url = os.environ.get("TEST_DATABASE_URL")
+    if not test_db_url:
+        pytest.exit(
+            "TEST_DATABASE_URL is not set. Tests require a PostgreSQL test database.",
+            returncode=1,
+        )
 
-    # Enable foreign keys for SQLite
-    if "sqlite" in db_url:
-        @event.listens_for(engine, "connect")
-        def set_sqlite_pragma(dbapi_connection, connection_record):
-            cursor = dbapi_connection.cursor()
-            cursor.execute("PRAGMA foreign_keys=ON")
-            cursor.close()
+    app_db_url = os.environ.get("DATABASE_URL", settings.database_url)
+    if test_db_url == app_db_url:
+        pytest.exit(
+            "TEST_DATABASE_URL must not be the same as DATABASE_URL. Test cleanup deletes all rows.",
+            returncode=1,
+        )
+
+    # Connect to PostgreSQL - any failure raises an exception and fails the test run
+    engine = create_engine(test_db_url, echo=False)
+    with engine.connect() as connection:
+        pass
 
     # Run Alembic migrations to create schema on the test engine connection
     backend_dir = Path(__file__).resolve().parent.parent
     alembic_ini_path = backend_dir / "alembic.ini"
     alembic_cfg = Config(str(alembic_ini_path))
     alembic_cfg.set_main_option("script_location", str(backend_dir / "alembic"))
-    alembic_cfg.set_main_option("sqlalchemy.url", db_url)
+    alembic_cfg.set_main_option("sqlalchemy.url", test_db_url)
 
     with engine.begin() as connection:
         alembic_cfg.attributes["connection"] = connection
         command.upgrade(alembic_cfg, "head")
 
-    yield engine, db_url
+    yield engine, test_db_url
 
     engine.dispose()
 

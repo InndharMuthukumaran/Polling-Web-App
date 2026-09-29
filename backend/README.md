@@ -20,13 +20,9 @@ source .venv/bin/activate
 .\.venv\Scripts\Activate.ps1
 ```
 
-Install the dependencies:
+Install the dependencies (including development/test dependencies):
 ```bash
-pip install -e .
-```
-Or install via requirements directly:
-```bash
-pip install "sqlalchemy>=2.0.0" "alembic>=1.13.0" "psycopg[binary]>=3.1.0" "pydantic-settings>=2.0.0" "pytest>=8.0.0"
+pip install -e ".[dev]"
 ```
 
 ---
@@ -47,7 +43,7 @@ Configure the environment variables in `.env` or in your shell:
 # Production / development database URL
 DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/polls_db
 
-# Test database URL
+# Test database URL (must be separate from DATABASE_URL)
 TEST_DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/polls_test_db
 ```
 
@@ -86,7 +82,12 @@ python -m alembic downgrade base
 
 ## 4. Running Tests
 
-Run the full pytest suite:
+Automated tests require a running PostgreSQL instance and a dedicated test database specified via `TEST_DATABASE_URL`:
+- `TEST_DATABASE_URL` must be set in your environment. If unset, pytest exits immediately.
+- `TEST_DATABASE_URL` must connect to a reachable PostgreSQL database; connection errors cause the test run to fail.
+- `TEST_DATABASE_URL` must not be the same as `DATABASE_URL` because test cleanup truncates all tables between test executions.
+
+Run the test suite:
 ```bash
 cd backend
 pytest
@@ -95,5 +96,3 @@ Or:
 ```bash
 python -m pytest
 ```
-
-When `TEST_DATABASE_URL` is set to a PostgreSQL database, tests execute against that database and wipe all data in reverse topological order between test runs. If `TEST_DATABASE_URL` is omitted or PostgreSQL is unreachable, the test suite falls back to an isolated in-memory database to allow immediate hermetic local verification.

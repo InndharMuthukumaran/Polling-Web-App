@@ -3,11 +3,14 @@
 This document captures assumptions and design decisions made for Part 1 (Database and rules engine).
 
 ## 1. Database and Environment
-- **PostgreSQL Focus**: The application is designed for PostgreSQL as mandated by the prompt, utilizing `psycopg` (v3) with the `postgresql+psycopg://` URI scheme.
-- **Test Database URL**:
-  - The test suite uses the `TEST_DATABASE_URL` environment variable.
-  - In development environments where a live PostgreSQL instance is not immediately active (or when running fast local hermetic tests), tests fall back to a SQLite database (`sqlite:///./test_polls.db` or memory) if `TEST_DATABASE_URL` is omitted or unconfigured. When `TEST_DATABASE_URL` is configured with PostgreSQL, tests run against PostgreSQL and clean up all tables between tests.
-  - Database schema definitions (UUID, DateTime with timezone, CheckConstraints, UniqueConstraints) are written using generic SQLAlchemy 2.0 types to ensure 100% PostgreSQL fidelity while also being testable across dialects.
+- **PostgreSQL Requirement**: PostgreSQL is strictly required for both application execution and automated test runs. The application utilizes `psycopg` (v3) with the `postgresql+psycopg://` URI scheme.
+- **Test Database Configuration**:
+  - The test suite requires the `TEST_DATABASE_URL` environment variable.
+  - Tests run exclusively on PostgreSQL. There is no SQLite fallback:
+    - If `TEST_DATABASE_URL` is unset, `pytest` terminates immediately via `pytest.exit`.
+    - If connecting to `TEST_DATABASE_URL` fails, the connection error is raised and tests fail.
+    - If `TEST_DATABASE_URL` is identical to `DATABASE_URL`, `pytest` terminates immediately to protect the application database from test truncation.
+  - All test data is wiped across all tables in reverse topological order between tests.
 - **Python Version**: The host environment runs Python 3.14.3. Code adheres strictly to Python 3.12+ typed standards (`datetime | None`, `list[str]`, typed ORM `Mapped[...]`).
 
 ## 2. Data Model & Integrity
@@ -24,7 +27,10 @@ This document captures assumptions and design decisions made for Part 1 (Databas
 - **Cascading Deletes**:
   - Child records (`poll_options`, `votes`, `vote_history`) use `ON DELETE CASCADE` referencing their parent `polls` and `members`.
 
-## 3. Rules Engine & Edge Cases
+## 3. Rules Engine & Concurrency
+- **Concurrency & Row Locking**:
+  - In `cast_vote` and `remove_vote`, the poll row is locked at the start of the transaction via `select(Poll).where(Poll.id == pid).with_for_update()`.
+  - This serializes concurrent vote operations on the poll, ensuring that simultaneous requests from the same member cannot bypass single-choice constraints and leave multiple active selections.
 - **Option Validation**:
   - Poll creation requires at least 2 options.
   - Option labels within a poll must be unique (case-sensitive check).

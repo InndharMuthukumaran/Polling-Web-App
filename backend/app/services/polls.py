@@ -60,25 +60,6 @@ class AtTargetMember:
     late: bool
     completed_at: datetime
 
-    @property
-    def id(self) -> uuid.UUID:
-        return self.member.id
-
-    @property
-    def display_name(self) -> str:
-        return self.member.display_name
-
-    def __getitem__(self, item: str) -> Any:
-        if hasattr(self, item):
-            return getattr(self, item)
-        raise KeyError(item)
-
-    def __contains__(self, item: str) -> bool:
-        return hasattr(self, item)
-
-    def get(self, item: str, default: Any = None) -> Any:
-        return getattr(self, item, default)
-
 
 @dataclass
 class PollStatusResult:
@@ -88,17 +69,6 @@ class PollStatusResult:
     excused: list[Member]
     behind_target: list[Member]
     not_voted: list[Member]
-
-    def __getitem__(self, item: str) -> Any:
-        if hasattr(self, item):
-            return getattr(self, item)
-        raise KeyError(item)
-
-    def __contains__(self, item: str) -> bool:
-        return hasattr(self, item)
-
-    def get(self, item: str, default: Any = None) -> Any:
-        return getattr(self, item, default)
 
 
 @dataclass
@@ -110,25 +80,6 @@ class MemberOptionHistory:
     first_selected_at: datetime
     last_selected_at: datetime
     is_selected: bool
-
-    @property
-    def label(self) -> str:
-        return self.option_label
-
-    @property
-    def currently_selected(self) -> bool:
-        return self.is_selected
-
-    def __getitem__(self, item: str) -> Any:
-        if hasattr(self, item):
-            return getattr(self, item)
-        raise KeyError(item)
-
-    def __contains__(self, item: str) -> bool:
-        return hasattr(self, item)
-
-    def get(self, item: str, default: Any = None) -> Any:
-        return getattr(self, item, default)
 
 
 # ---------------------------------------------------------------------------
@@ -338,7 +289,9 @@ def cast_vote(
     mid = resolve_uuid(member_id)
     oid = resolve_uuid(option_id)
 
-    poll = session.get(Poll, pid)
+    poll = session.scalar(
+        select(Poll).where(Poll.id == pid).with_for_update()
+    )
     if not poll:
         raise PollNotFoundError(f"Poll {pid} not found.")
 
@@ -438,7 +391,9 @@ def remove_vote(
     pid = resolve_uuid(poll_id)
     mid = resolve_uuid(member_id)
 
-    poll = session.get(Poll, pid)
+    poll = session.scalar(
+        select(Poll).where(Poll.id == pid).with_for_update()
+    )
     if not poll:
         raise PollNotFoundError(f"Poll {pid} not found.")
 

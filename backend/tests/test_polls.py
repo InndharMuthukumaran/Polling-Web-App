@@ -307,7 +307,7 @@ def test_6_four_status_categories_present(db_session):
 
     status = get_poll_status(db_session, poll.id)
 
-    assert [m.id for m in status.at_target] == [alice.id]
+    assert [m.member.id for m in status.at_target] == [alice.id]
     assert [m.id for m in status.excused] == [bob.id]  # Excused, not behind/defaulter
     assert [m.id for m in status.behind_target] == [charlie.id]
     assert [m.id for m in status.not_voted] == [dana.id]
@@ -351,7 +351,7 @@ def test_7_category_order_in_multiple_choice(db_session):
 
     status = get_poll_status(db_session, poll.id)
 
-    assert m1.id in [e.id for e in status.at_target]
+    assert m1.id in [e.member.id for e in status.at_target]
     assert m2.id in [e.id for e in status.excused]
     assert m3.id in [e.id for e in status.behind_target]
 
@@ -388,7 +388,7 @@ def test_8_stage_style_poll(db_session):
     behind_ids = {m.id for m in status.behind_target}
     assert m1.id in behind_ids
     assert m2.id in behind_ids
-    assert [m.id for m in status.at_target] == [m3.id]
+    assert [m.member.id for m in status.at_target] == [m3.id]
 
 
 # ---------------------------------------------------------------------------
@@ -574,7 +574,7 @@ def test_11_closed_poll_behavior(db_session):
     # Reads still work
     status = get_poll_status(db_session, poll.id)
     assert len(status.at_target) == 1
-    assert status.at_target[0].id == member.id
+    assert status.at_target[0].member.id == member.id
 
     history = get_member_history(db_session, poll.id, member.id)
     assert len(history) == 1
@@ -666,3 +666,67 @@ def test_12_validation_and_integrity_errors(db_session):
     # 6. Inactive member
     with pytest.raises(MemberInactiveError):
         cast_vote(db_session, poll1.id, inactive_m1.id, poll1.options[0].id)
+
+
+# ---------------------------------------------------------------------------
+# Test 13: Concurrent votes safe under single choice
+# ---------------------------------------------------------------------------
+def test_13_concurrent_votes_single_choice(test_engine):
+    """Two concurrent threads casting different options for the same member in single-choice poll leave exactly one selection."""
+    import threading
+    from sqlalchemy import select
+    from sqlalchemy.orm import sessionmaker
+    from app.db import Base
+    from app.models import Vote
+
+    session_factory = sessionmaker(bind=test_engine, autocommit=False, autoflush=False)
+
+    try:
+        with session_factory() as setup_session:
+            group = create_group(setup_session, "Concurrent Group")
+            member = add_member(setup_session, group.id, "Concurrent Member")
+            poll = create_poll(
+                setup_session,
+                group_id=group.id,
+                name="Concurrent Poll",
+                allow_multiple=False,
+                options=[
+                    PollOptionInput(label="Option 1", role="target"),
+                    PollOptionInput(label="Option 2", role="target"),
+                ],
+            )
+            poll_id = poll.id
+            member_id = member.id
+            opt1_id = poll.options[0].id
+            opt2_id = poll.options[1].id
+
+        barrier = threading.Barrier(2)
+
+        def worker(option_id):
+            barrier.wait()
+            with session_factory() as thread_session:
+                cast_vote(thread_session, poll_id, member_id, option_id)
+
+        t1 = threading.Thread(target=worker, args=(opt1_id,))
+        t2 = threading.Thread(target=worker, args=(opt2_id,))
+
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        with session_factory() as verify_session:
+            votes = verify_session.scalars(
+                select(Vote).where(Vote.poll_id == poll_id, Vote.member_id == member_id)
+            ).all()
+            assert len(votes) == 1
+            assert votes[0].option_id in (opt1_id, opt2_id)
+
+            status = get_poll_status(verify_session, poll_id)
+            assert len(status.at_target) == 1
+            assert status.at_target[0].member.id == member_id
+    finally:
+        with test_engine.begin() as conn:
+            for table in reversed(Base.metadata.sorted_tables):
+                conn.execute(table.delete())
+
