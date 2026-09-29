@@ -1,0 +1,1 @@
+"""Polling application test suite."""
