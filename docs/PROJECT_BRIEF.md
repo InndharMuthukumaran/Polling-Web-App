@@ -1,6 +1,6 @@
 # Project Brief: Advanced Group Polling (working title)
 
-Version 2. Last updated: 29 Sep 2026. Status: planning finished, Part 1 prompt ready, nothing built yet.
+Version 3. Last updated: 29 Sep 2026. Status: Part 1 built and verified; Part 2A and 2B prompts ready.
 
 ## 0. How Claude should use this document
 
@@ -42,6 +42,7 @@ Example: the goal is to complete an assignment. Option 1 "Yes" is the target, op
 
 **Groups and names**
 - Each group has its own display names, like WhatsApp's per-group "about" that can differ for each group.
+- Identity for link voting (confirmed 29 Sep): the creator pre-loads the member list per group, each member picks their name once from that list, the device remembers it, and the creator can approve or reset a claim. Inndhar will try the full flow himself and request changes afterwards if needed.
 
 **Defaulters**
 - One-click lists: people who haven't voted, and people who voted but haven't reached the target.
@@ -79,7 +80,8 @@ Example: the goal is to complete an assignment. Option 1 "Yes" is the target, op
 - Render free tier sleeps after 15 minutes, so use an external timer (UptimeRobot, cron-job.org or similar) calling a "send due reminders" address every 5 minutes. This keeps the server awake and drives reminders, with the database as the source of truth for what is due; missed reminders go out on the next tick. Move to a paid always-on backend before real users.
 - No Redis in the first version. Write the reminder code as a self-contained piece so a queue can be added later.
 - Do not send real member names to the LLM (the free Gemini tier may use content to improve Google's products). The LLM writes text with a placeholder like {name}; the app fills it in. Keep the LLM behind one swappable piece of code, with a fixed-template fallback if it fails.
-- Identity for link voting: creator pre-loads the member list per group, members pick their name once and the device remembers it, creator can approve or reset a claim. Honor-system level; phone verification could be an optional later upgrade.
+- Identity is honor-system level; phone verification could be an optional later upgrade.
+- Part 2 identity mechanics (chosen by Claude, not yet confirmed): no user accounts; creating a group returns a one-time admin token (whoever holds it is the creator for that group, one token per group, stored only as a hash); joining uses an unguessable join code; claiming a name returns a one-time member token that the device stores; the group has a setting "require claim approval" (off by default: first claim wins; on: claims stay pending until the creator approves); resetting a claim frees the name but keeps its votes and history, so the next claimant inherits them; a poll link also reveals the group's join code, so anyone with a poll link can join the group.
 - Show current status alongside history ("Yes: first 2:00, last 4:00, currently not selected").
 - History visible only to the creator by default; members told it is recorded. Defaulter lists visible to the creator or admins by default, shareable if the creator chooses.
 - When everyone reaches the target: reminders stop, creator gets a "close the poll?" notice, one gentle follow-up later if ignored. Optional auto-close toggle, off by default.
@@ -96,8 +98,9 @@ Example: the goal is to complete an assignment. Option 1 "Yes" is the target, op
 
 ## 5. Build parts (proposed order)
 
-1. Data and rules engine: tables, voting and history rules, defaulter lists, lateness, closing, tests. No API or UI. Prompt ready (part-1-prompt.md).
-2. API and identity: FastAPI endpoints, member list per group, name claiming with approve and reset, poll ownership by the creator.
+1. Data and rules engine: tables, voting and history rules, defaulter lists, lateness, closing, tests. No API or UI. DONE (built, cleaned up, verified on PostgreSQL: 13 tests).
+2A. Identity layer: admin and member tokens, join codes, name claiming with approve and reset, member management, migration and tests. No HTTP. Prompt ready (part-2a-prompt.md).
+2B. HTTP API: FastAPI endpoints for groups, members, joining, polls, voting, status and history, with error handling and tests. Prompt ready (part-2b-prompt.md). Run after 2A is reviewed.
 3. Web app: the vote page opened from a link (the WhatsApp route) and the creator dashboard (defaulter lists, history, close button).
 4. Reminders and AI: the external timer, due-reminder logic, description refining with confirmation, personalised messages, template fallback, quiet hours, the "everyone reached the target" notice, languages.
 5. Telegram bot.
@@ -110,11 +113,12 @@ The web app comes before the bots in this order because creators need the dashbo
 
 1. Is one extra tap (link voting) acceptable, or must the experience feel fully native from the start?
 2. Which group type is first: classrooms, project teams, clubs, or study/fitness groups?
-3. Is the identity approach in section 4 acceptable, or is something stricter needed?
-4. Confirm or change the default rules listed at the end of section 4.
-5. Confirm the part order in section 5 (web app before bots), and React.
-6. Should creators manage polls in the web dashboard, inside Telegram and Discord, or both?
-7. Data retention and deletion rules for history and member lists.
+3. Confirm or change the default rules listed at the end of section 4 and the Part 2 identity mechanics.
+4. Confirm the part order in section 5 (web app before bots), and React.
+5. Should creators manage polls in the web dashboard, inside Telegram and Discord, or both?
+6. Data retention and deletion rules for history and member lists.
+7. What happens if a creator loses the admin token (no recovery exists yet), and how a second admin is added (they would have to share the token for now).
+8. Is it acceptable that a poll link also lets a visitor join the group?
 
 ## 7. Platform and hosting notes (as of Sep 2026, verify before relying)
 
@@ -149,4 +153,5 @@ The web app comes before the bots in this order because creators need the dashbo
 ## 10. Status log
 
 - 2026-09-29: ideation and feasibility finished. Decisions in section 3 confirmed, including the multiple-choice toggle, Postgres on a free non-expiring host, and building with a coding agent. Part 1 prompt written. Nothing built.
-- Part 1 built (schema, rules engine, 12 passing tests on PostgreSQL). Cleanup pass done.
+- 2026-09-29: Part 1 built by the coding agent, reviewed by Claude, and cleaned up (tests now run only on PostgreSQL, row lock added for concurrent votes). Verified: migration works on an empty database and all 13 tests pass on a real PostgreSQL server. Repo: github.com/InndharMuthukumaran/Polling-Web-App.
+- 2026-09-29: Identity approach confirmed. Part 2 split into 2A (identity layer) and 2B (HTTP API); both prompts written.

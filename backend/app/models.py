@@ -55,6 +55,15 @@ class Group(Base):
         Uuid, primary_key=True, default=uuid.uuid4
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    join_code: Mapped[str] = mapped_column(
+        String(32), unique=True, nullable=False
+    )
+    admin_token_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    require_claim_approval: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(
         UTCDateTime, default=utc_now, nullable=False
     )
@@ -75,6 +84,10 @@ class Member(Base):
         UniqueConstraint(
             "group_id", "display_name", name="uq_members_group_display_name"
         ),
+        CheckConstraint(
+            "claim_status IN ('unclaimed', 'pending', 'approved')",
+            name="ck_members_claim_status",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -86,6 +99,15 @@ class Member(Base):
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[bool] = mapped_column(
         Boolean, default=True, nullable=False
+    )
+    claim_status: Mapped[str] = mapped_column(
+        String(20), default="unclaimed", nullable=False
+    )
+    member_token_hash: Mapped[str | None] = mapped_column(
+        String(64), unique=True, nullable=True
+    )
+    claimed_at: Mapped[datetime | None] = mapped_column(
+        UTCDateTime, nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
         UTCDateTime, default=utc_now, nullable=False

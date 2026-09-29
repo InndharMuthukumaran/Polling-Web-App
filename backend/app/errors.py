@@ -59,3 +59,34 @@ class PollValidationError(PollingAppError):
     """Raised when poll creation input fails validation constraints."""
 
     pass
+
+
+class InvalidTokenError(PollingAppError):
+    """Raised when a provided token is missing, malformed, or invalid."""
+
+    pass
+
+
+class PermissionDeniedError(PollingAppError):
+    """Raised when an operation is attempted on an entity outside the allowed group."""
+
+    pass
+
+
+class ClaimConflictError(PollingAppError):
+    """Raised when attempting to claim a member that has already been claimed."""
+
+    pass
+
+
+class ClaimStateError(PollingAppError):
+    """Raised when an action is invalid for the member's current claim state."""
+
+    pass
+
+
+class ClaimNotApprovedError(PollingAppError):
+    """Raised when a member claim has not yet been approved."""
+
+    pass
+

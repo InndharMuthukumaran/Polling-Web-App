@@ -22,6 +22,7 @@ from app.errors import (
     PollValidationError,
 )
 from app.models import Group, Member, Poll, PollOption, Vote, VoteHistory
+from app.security import generate_join_code
 
 VALID_ROLES = frozenset({"target", "in_progress", "excused", "not_yet"})
 VALID_COMPLETION_MODES = frozenset({"first", "last"})
@@ -100,6 +101,9 @@ def create_group(
     group = Group(
         id=uuid.uuid4(),
         name=name.strip(),
+        join_code=generate_join_code(),
+        admin_token_hash=None,
+        require_claim_approval=False,
         created_at=current_time,
     )
     session.add(group)
