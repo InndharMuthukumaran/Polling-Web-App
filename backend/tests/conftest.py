@@ -89,3 +89,35 @@ def db_session(test_engine):
     with test_engine.begin() as conn:
         for table in reversed(Base.metadata.sorted_tables):
             conn.execute(table.delete())
+
+
+@pytest.fixture
+def client(test_engine):
+    """Provide a FastAPI TestClient bound to the test database with after-test cleanup."""
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.api.deps import get_db
+
+    session_factory = sessionmaker(bind=test_engine, autocommit=False, autoflush=False)
+
+    def override_get_db():
+        session: Session = session_factory()
+        try:
+            yield session
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    with TestClient(app) as test_client:
+        yield test_client
+
+    app.dependency_overrides.clear()
+
+    # Clean up all data from tables in reverse dependency order
+    with test_engine.begin() as conn:
+        for table in reversed(Base.metadata.sorted_tables):
+            conn.execute(table.delete())

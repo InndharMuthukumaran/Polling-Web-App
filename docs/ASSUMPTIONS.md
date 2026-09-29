@@ -124,3 +124,44 @@ This section captures assumptions and design decisions made for Part 2A (Identit
   - Updating without modifying attributes (`display_name=None, is_active=None`) returns the member unchanged without error.
   - Accessing a member belonging to a different group raises `PermissionDeniedError`.
 
+# Assumptions and Design Decisions (Part 2B: HTTP API)
+
+This section captures assumptions and design decisions made for Part 2B (FastAPI HTTP API layer).
+
+## 1. Architecture & Thin Routes
+- **No Business Logic in API Layer**:
+  - The API layer handles HTTP protocol concerns exclusively: header extraction, request validation, calling service functions in `app/services/identity.py` and `app/services/polls.py`, and serializing responses.
+  - All voting rules, category calculations, completion time modes, and claim state transitions are delegated directly to the Part 1 and Part 2A service layer.
+
+## 2. Public Poll Access & Join Code Sharing
+- **Public Visibility**:
+  - `GET /api/v1/polls/{poll_id}` is public (no authentication required).
+  - It exposes general poll details, options (labels and positions, strictly excluding option `role`s to avoid disclosing target options before voting), and the group's `name` and `join_code`.
+  - **Assumption**: As defined in the brief, anyone possessing a poll link can see the group's join code and join the group.
+  - It never returns any member identities, votes, or history.
+
+## 3. Authentication & Error Envelope
+- **Headers & Distinction**:
+  - `X-Admin-Token` identifies the creator/admin for group and poll management.
+  - `X-Member-Token` identifies the member's device.
+  - Tokens are verified against database hashes. If an `X-Admin-Token` is valid for another group in the database, the API returns `403 forbidden`. If it does not match any group, it returns `401 invalid_token`.
+  - Admin tokens cannot authenticate as member tokens, and member tokens cannot authenticate as admin tokens (both return 401).
+- **Standardized Error Envelope**:
+  - All errors originating from domain exceptions, authorization guards, not-found conditions, and database conflicts conform strictly to:
+    ```json
+    {
+      "error": {
+        "code": "...",
+        "message": "..."
+      }
+    }
+    ```
+  - FastAPI's default 422 structure is retained specifically for malformed request bodies (`RequestValidationError`).
+
+## 4. Session Scope & Row Lock Safety
+- **Per-Request Transaction Lifecycle**:
+  - The `get_db` FastAPI dependency yields a single database session per request.
+  - Any unhandled exception triggers an immediate `session.rollback()`.
+  - Sessions are unconditionally closed in a `finally` block upon request completion, ensuring PostgreSQL row locks (such as `SELECT ... FOR UPDATE` during voting and claim operations) are never left hanging.
+
+

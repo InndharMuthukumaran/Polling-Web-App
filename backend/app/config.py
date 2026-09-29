@@ -21,6 +21,15 @@ class Settings(BaseSettings):
         default="postgresql+psycopg://postgres:postgres@localhost:5432/polls_test_db",
         alias="TEST_DATABASE_URL",
     )
+    cors_origins: str = Field(
+        default="http://localhost:5173",
+        alias="CORS_ORIGINS",
+    )
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        """Return CORS origins as a trimmed list of strings."""
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
 
 settings = Settings()
