@@ -15,6 +15,7 @@ export class ApiError extends Error {
 export interface RequestOptions extends Omit<RequestInit, 'body'> {
   body?: unknown;
   token?: string;
+  adminToken?: string;
 }
 
 export const API_BASE_URL: string =
@@ -25,12 +26,16 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
   const url = `${API_BASE_URL}${normalizedPath}`;
 
-  const { body, token, headers: customHeaders, ...restOptions } = options;
+  const { body, token, adminToken, headers: customHeaders, ...restOptions } = options;
 
   const headers = new Headers(customHeaders);
 
   if (token) {
     headers.set('X-Member-Token', token);
+  }
+
+  if (adminToken) {
+    headers.set('X-Admin-Token', adminToken);
   }
 
   const fetchOptions: RequestInit = {
@@ -85,6 +90,8 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
 export function getFriendlyErrorMessage(error: unknown): string {
   if (error instanceof ApiError) {
     switch (error.code) {
+      case 'missing_token':
+        return 'Authentication token is missing.';
       case 'name_already_claimed':
         return 'This name has already been claimed by someone else.';
       case 'poll_closed':
@@ -99,6 +106,12 @@ export function getFriendlyErrorMessage(error: unknown): string {
         return 'The requested poll or group link was not found. Please verify the URL.';
       case 'forbidden':
         return 'You do not have permission to access this resource.';
+      case 'validation_error':
+        return error.message || 'Please check the entered values and try again.';
+      case 'conflict':
+        return error.message || 'A conflicting item already exists.';
+      case 'invalid_claim_state':
+        return error.message || 'This claim cannot be updated in its current state.';
       case 'network_error':
         return 'Could not connect to the server. Please check your internet connection.';
       default:

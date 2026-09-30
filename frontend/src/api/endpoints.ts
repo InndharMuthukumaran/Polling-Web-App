@@ -78,3 +78,167 @@ export async function getMyPollHistory(
     token: memberToken,
   });
 }
+
+// Creator / Admin Endpoints (Part 3B)
+
+export async function createGroup(name: string): Promise<import('./types').CreateGroupResponse> {
+  return request<import('./types').CreateGroupResponse>('/api/v1/groups', {
+    method: 'POST',
+    body: { name },
+  });
+}
+
+export async function getGroup(
+  groupId: string,
+  adminToken: string,
+): Promise<import('./types').AdminGroupDetailResponse> {
+  return request<import('./types').AdminGroupDetailResponse>(
+    `/api/v1/groups/${encodeURIComponent(groupId)}`,
+    {
+      method: 'GET',
+      adminToken,
+    },
+  );
+}
+
+export async function updateGroup(
+  groupId: string,
+  adminToken: string,
+  payload: { require_claim_approval?: boolean },
+): Promise<import('./types').AdminGroupDetailResponse> {
+  return request<import('./types').AdminGroupDetailResponse>(
+    `/api/v1/groups/${encodeURIComponent(groupId)}`,
+    {
+      method: 'PATCH',
+      adminToken,
+      body: payload,
+    },
+  );
+}
+
+export async function addMembers(
+  groupId: string,
+  adminToken: string,
+  displayNames: string[],
+): Promise<import('./types').GroupMember[]> {
+  return request<import('./types').GroupMember[]>(
+    `/api/v1/groups/${encodeURIComponent(groupId)}/members`,
+    {
+      method: 'POST',
+      adminToken,
+      body: { display_names: displayNames },
+    },
+  );
+}
+
+export async function updateMember(
+  groupId: string,
+  memberId: string,
+  adminToken: string,
+  payload: { display_name?: string; is_active?: boolean },
+): Promise<import('./types').GroupMember> {
+  return request<import('./types').GroupMember>(
+    `/api/v1/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(memberId)}`,
+    {
+      method: 'PATCH',
+      adminToken,
+      body: payload,
+    },
+  );
+}
+
+export async function approveMemberClaim(
+  groupId: string,
+  memberId: string,
+  adminToken: string,
+): Promise<{ status: string }> {
+  return request<{ status: string }>(
+    `/api/v1/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(memberId)}/approve`,
+    {
+      method: 'POST',
+      adminToken,
+    },
+  );
+}
+
+export async function resetMemberClaim(
+  groupId: string,
+  memberId: string,
+  adminToken: string,
+): Promise<{ status: string }> {
+  return request<{ status: string }>(
+    `/api/v1/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(memberId)}/reset`,
+    {
+      method: 'POST',
+      adminToken,
+    },
+  );
+}
+
+export async function createPoll(
+  groupId: string,
+  adminToken: string,
+  payload: import('./types').CreatePollPayload,
+): Promise<import('./types').CreatePollResponse> {
+  return request<import('./types').CreatePollResponse>(
+    `/api/v1/groups/${encodeURIComponent(groupId)}/polls`,
+    {
+      method: 'POST',
+      adminToken,
+      body: payload,
+    },
+  );
+}
+
+export async function getGroupPolls(
+  groupId: string,
+  adminToken: string,
+): Promise<import('./types').AdminPollListItem[]> {
+  return request<import('./types').AdminPollListItem[]>(
+    `/api/v1/groups/${encodeURIComponent(groupId)}/polls`,
+    {
+      method: 'GET',
+      adminToken,
+    },
+  );
+}
+
+export async function getAdminPollStatus(
+  pollId: string,
+  adminToken: string,
+): Promise<import('./types').AdminPollStatusResponse> {
+  return request<import('./types').AdminPollStatusResponse>(
+    `/api/v1/polls/${encodeURIComponent(pollId)}/status`,
+    {
+      method: 'GET',
+      adminToken,
+    },
+  );
+}
+
+export async function getAdminPollHistory(
+  pollId: string,
+  adminToken: string,
+): Promise<import('./types').AdminPollHistoryResponse> {
+  return request<import('./types').AdminPollHistoryResponse>(
+    `/api/v1/polls/${encodeURIComponent(pollId)}/history`,
+    {
+      method: 'GET',
+      adminToken,
+    },
+  );
+}
+
+export async function closePoll(
+  pollId: string,
+  adminToken: string,
+): Promise<{ status: string }> {
+  return request<{ status: string }>(
+    `/api/v1/polls/${encodeURIComponent(pollId)}/close`,
+    {
+      method: 'POST',
+      adminToken,
+    },
+  );
+}
+

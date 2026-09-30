@@ -1,4 +1,4 @@
-# Polling Web App - Frontend (Part 3A)
+# Polling Web App - Frontend (Parts 3A & 3B)
 
 A modern, mobile-first web application for group polling built with React 18, Vite, TypeScript, Tailwind CSS v4, and Vitest.
 
@@ -7,6 +7,7 @@ A modern, mobile-first web application for group polling built with React 18, Vi
 ## Prerequisites
 
 - **Node.js**: v18 or newer (tested on Node v25+)
+- **PostgreSQL**: Running on `localhost:5432`
 - **Backend API**: Running on `http://localhost:8000` (FastAPI backend in `backend/`)
 
 ---
@@ -71,9 +72,9 @@ npm run preview
 
 ---
 
-## Pages Implemented (Part 3A)
+## Pages Implemented
 
-- **`/` (HomePage)**: Placeholder card directing members to open poll links.
+### Member Pages (Part 3A)
 - **`/join/:joinCode` (JoinPage)**:
   - Fetches group info via `GET /api/v1/join/{joinCode}`.
   - Verifies stored device identity via `GET /api/v1/me`.
@@ -84,42 +85,117 @@ npm run preview
   - Loads poll details via `GET /api/v1/polls/{pollId}`.
   - Handles inline name claiming when device has no identity or on 401.
   - Single/multiple choice voting with toggle buttons via `POST /api/v1/polls/{pollId}/vote` and `DELETE /api/v1/polls/{pollId}/vote?option_id=...`.
+  - Radio indicators for single-choice polls, checkbox indicators for multiple-choice polls.
   - "Clear my vote" action to remove all selections.
-  - Shows notice that the creator can view first and last selected timestamps.
+  - Notice that the creator can view first and last selected timestamps.
   - Displays collapsible "Your history" section from `GET /api/v1/polls/{pollId}/me`.
   - Read-only banner and frozen selections when poll is closed.
   - Notice when deadline has passed but poll is still open ("vote will be marked late").
 - **`*` (NotFoundPage)**: Friendly 404 page with navigation back to home.
 
+### Creator Pages (Part 3B)
+- **`/` (HomePage)**:
+  - Create a group with Group Name input.
+  - "Save your creator access" reveal screen: Group ID and Admin Token with copy buttons, security warning, and "I have saved it" confirmation checkbox.
+  - "Your groups" list linking to `/g/:groupId`.
+  - "Connect an existing group" with Group ID and Admin Token inputs.
+  - Member helper line: "Have a poll link? Just open it."
+- **`/g/:groupId` (DashboardPage)**:
+  - Share card: Join link with copy button, and toggle for "Require my approval before a member can vote".
+  - Members card: roster with status badges (Not claimed, Waiting for approval, Claimed, Inactive), actions to Approve, Reset (with confirmation prompt), Rename (inline), Deactivate/Reactivate, and "Add members" textarea.
+  - Polls card: list of polls with Open/Closed badges and deadlines, plus "New poll" button.
+  - Automatic reconnection screen when creator token is missing or rejected (401/403).
+- **`/g/:groupId/polls/new` (NewPollPage)**:
+  - Name, description, multiple-choice switch, local deadline input, and completion time mode radio ("last" recommended vs "first").
+  - Options editor with role selection (Target, In progress, Excused, Not yet).
+  - Quick-fill templates: "Yes / Not yet", "Stages", and "Add 'Need more time' option".
+  - Full client-side validation mirroring backend rules.
+- **`/g/:groupId/polls/:pollId` (AdminPollPage)**:
+  - Share card: voting link copy, "Copy announcement", and "Copy reminder" buttons.
+  - Summary metrics: Done, Behind, Excused, Not voted, plus Late count.
+  - All-reached banner when every active member reaches target or is excused.
+  - Defaulter lists: sections for Not voted, Behind, Excused, and Done (with Late badges & completion times); prominent "Copy defaulters" button.
+  - Collapsible voting history per member.
+  - Close poll action with confirmation prompt.
+  - Auto-refresh every 15 seconds while poll is open and window is visible.
+
 ---
 
-## How to Smoke-Test Against the Backend
+## Full Manual Smoke-Test Script
 
-1. **Start the PostgreSQL database and backend**:
-   ```bash
-   cd backend
-   # Ensure virtual environment is active and DATABASE_URL is set
-   alembic upgrade head
-   uvicorn app.main:app --reload --port 8000
-   ```
+Follow these steps to smoke-test the complete workflow from group creation to member voting and closing:
 
-2. **Verify backend is healthy**:
-   ```bash
-   curl http://localhost:8000/api/v1/health
-   # Returns: {"status": "ok"}
-   ```
+### 1. Start Database & Backend
+```bash
+cd backend
+# Ensure PostgreSQL is running on localhost:5432
+alembic upgrade head
+python -m uvicorn app.main:app --reload --port 8000
+```
+Verify health:
+```bash
+curl http://localhost:8000/api/v1/health
+# Returns: {"status": "ok"}
+```
 
-3. **Start the frontend development server**:
-   ```bash
-   cd ../frontend
-   npm run dev
-   ```
+### 2. Start Frontend
+```bash
+cd ../frontend
+npm run dev
+```
+Open [http://localhost:5173](http://localhost:5173) in your primary browser.
 
-4. **Test the flow**:
-   - Create a group and poll via backend API or curl/python script. Note the `join_code` and `poll_id`.
-   - Open `http://localhost:5173/join/<join_code>`:
-     - Verify member names appear. Select your name, click "Confirm & continue", and verify your identity is recognized.
-   - Open `http://localhost:5173/p/<poll_id>`:
-     - Tap options to vote and verify selections update.
-     - Tap selected option or "Clear my vote" to remove selections.
-     - Expand "Your history" to view timestamp records.
+### 3. Create a Group (Creator)
+1. On the Home Page, enter a group name (e.g. `Weekend Football`) and click **Create**.
+2. On the **Save your creator access** screen:
+   - Copy the Group ID and Admin Token.
+   - Tick the **"I have saved it"** checkbox.
+   - Click **Go to my group**.
+
+### 4. Add Members & Share (Creator Dashboard)
+1. On the group dashboard (`/g/:groupId`):
+   - In the **Add members** section, paste names:
+     ```
+     Alice Cooper
+     Bob Smith
+     Charlie Brown
+     ```
+   - Click **Add Members** and verify all 3 appear in the list with `Not claimed` badges.
+2. In the **Group Invitation** card:
+   - Click **Copy** to copy the join link (`http://localhost:5173/join/<joinCode>`).
+
+### 5. Claim a Name (Member Device)
+1. Open a **second browser profile** or **incognito window**.
+2. Paste the join link (`http://localhost:5173/join/<joinCode>`).
+3. Click **Alice Cooper**.
+4. Review `"This is me: Alice Cooper"` and click **Confirm**.
+5. Verify the screen displays `"Recognized Member: You are Alice Cooper in Weekend Football"`.
+
+### 6. Create a Poll (Creator)
+1. In the first browser (Creator Dashboard), click **New poll**.
+2. Enter Poll Name: `Match Attendance`.
+3. Click the **"Yes / Not yet"** quick-fill button.
+4. Click **Add "Need more time" option**.
+5. Leave completion time mode as `"When the member settled on the target"`.
+6. Click **Create Poll**.
+7. The browser navigates to the Admin Poll Page (`/g/:groupId/polls/:pollId`).
+
+### 7. Share & Vote (Member)
+1. In the creator view, copy the voting link (`http://localhost:5173/p/:pollId`).
+2. In the second browser (Alice's window), open the poll link.
+3. Verify Alice is recognized (`Voting as Alice Cooper`).
+4. Tap **Yes** (radio indicator fills).
+5. Open **Your history** to view the recorded timestamp.
+
+### 8. Watch Creator Dashboard Update & Copy Defaulters
+1. In the creator window (`/g/:groupId/polls/:pollId`), watch the counts update:
+   - Done: 1 (Alice Cooper)
+   - Not voted: 2 (Bob Smith, Charlie Brown)
+2. Click **Copy defaulters (2)**.
+3. Paste into a text editor and verify Bob Smith and Charlie Brown are copied.
+
+### 9. Close Poll (Creator)
+1. Click **Close Poll**.
+2. In the confirmation dialog, click **Confirm & Close Poll**.
+3. Verify the status updates to `Closed`.
+4. In Alice's member window, reload or tap an option; verify the poll displays `"This poll is closed"` with options frozen.

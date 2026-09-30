@@ -236,6 +236,38 @@ This section documents the three targeted cleanup fixes applied following review
 - **Problem**: `frontend/src/pages/PollPage.tsx` previously used a square checkbox indicator for both single-choice and multiple-choice polls.
 - **Resolution**: Single-choice polls (`allow_multiple == false`) now render a round radio indicator (`rounded-full` with an inner filled circle dot when selected, and `data-indicator="radio"`). Multiple-choice polls retain the square checkbox (`rounded-md` with checkmark icon and `data-indicator="checkbox"`). Deselection behavior remains intact. Added a unit test in `frontend/src/pages/PollPage.test.tsx` asserting indicator distinction.
 
+# Assumptions and Design Decisions (Part 3B: Creator Pages)
+
+This section documents the assumptions, choices, and architectural decisions made for Part 3B (Creator Pages).
+
+## 1. Creator Identity & Local Storage
+- **Key Convention**: Creator tokens and group metadata are stored under `pollapp.admin.<groupId>` as JSON `{ adminToken, groupName }`.
+- **Fault-Tolerant Scanning**:
+  - `listAdminGroups()` iterates over all keys matching `pollapp.admin.` in `localStorage` and the in-memory fallback.
+  - Corrupt, invalid, or empty JSON records are safely ignored and excluded from group lists.
+- **Access Invalidation**:
+  - If any admin endpoint call returns HTTP 401 Unauthorized or 403 Forbidden, the page presents: `"Your creator access for this group is not valid on this device"` with a reconnect form to input a valid Admin Token.
+
+## 2. API Design & Known Gaps
+- **Option Roles Post-Creation**:
+  - The public poll endpoint (`GET /polls/{id}`) and admin status endpoint (`GET /polls/{id}/status`) intentionally omit option `role` values (`target`, `in_progress`, `excused`, `not_yet`) to avoid premature disclosure of target options.
+  - The frontend relies directly on the server's categorized lists (`at_target`, `behind_target`, `excused`, `not_voted`) returned by `GET /polls/{id}/status` rather than attempting to calculate roles client-side.
+
+## 3. UI/UX & Workflow Details
+- **Token Reveal Screen**:
+  - Upon group creation (`POST /groups`), the returned `admin_token` is saved locally and presented to the creator with a clear warning: `"This is the only time the token is shown. There is no way to recover it. Anyone who has it can manage this group."`
+  - The `"Go to my group"` button is disabled until the creator explicitly checks `"I have saved it"`.
+- **Defaulters Copy Action**:
+  - The primary `"Copy defaulters"` button calculates the combined count of `not_voted` and `behind_target` members, copying their names separated by newlines.
+  - Clipboard operations use `navigator.clipboard.writeText` with an automatic fallback to an off-screen `textarea` and `document.execCommand('copy')`.
+- **Poll Deadline & Lateness Modes**:
+  - Deadlines selected via `datetime-local` inputs in the viewer's local timezone are converted to UTC ISO 8601 strings (`new Date(deadlineLocal).toISOString()`) before sending to `POST /groups/{id}/polls`.
+  - `completion_time_mode` is always explicitly submitted as either `'last'` (default: settled on target) or `'first'` (first selected target).
+- **Auto-Refresh**:
+  - `AdminPollPage` refreshes status every 15 seconds while the poll is open and the document is visible (`document.visibilityState === 'visible'`).
+  - Refresh occurs immediately after administrative actions (closing poll, approving claims, resetting claims, adding members).
+
+
 
 
 
