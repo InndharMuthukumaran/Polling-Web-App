@@ -180,5 +180,46 @@ This section captures the three targeted fixes applied following review of Part 
 - **Problem**: `PollCreate` in `app/api/schemas.py` previously defaulted `completion_time_mode` to `"first"`, contradicting the agreed service default (`"last"`, evaluating completion when a member settles on the target) and allowed arbitrary strings.
 - **Resolution**: `PollCreate.completion_time_mode` now defaults to `"last"` and is typed as `Literal["first", "last"]`, ensuring strict 422 rejection for invalid modes.
 
+# Assumptions and Design Decisions (Part 3A: Web App Foundation & Member Pages)
+
+This section captures assumptions and design decisions made for Part 3A (Frontend Foundation and Member Pages).
+
+## 1. Technology & Architecture
+- **Framework & Build**: Built with Vite, React 18, strict TypeScript, and Tailwind CSS v4 using `@tailwindcss/vite`.
+- **Zero Heavy Dependencies**: Native browser `fetch` is used instead of Axios or external UI component libraries; SVG icons are declared inline.
+- **Routing**: `react-router-dom` handles client-side routes for `/` (`HomePage`), `/join/:joinCode` (`JoinPage`), `/p/:pollId` (`PollPage`), and `*` (`NotFoundPage`).
+
+## 2. API Client & Error Handling
+- **Request Wrapper**:
+  - Automatically prepends `VITE_API_BASE_URL` (defaulting to `http://localhost:8000`).
+  - Serializes JSON payloads and attaches `Content-Type: application/json`.
+  - Attaches `X-Member-Token` when an authentication token is provided.
+- **Error Normalization**:
+  - The API error envelope `{"error": {"code", "message"}}` is parsed into an `ApiError` instance holding `status`, `code`, and `message`.
+  - Network and offline errors (`Failed to fetch`) are normalized to `ApiError` with `status: 0` and `code: "network_error"`.
+  - `getFriendlyErrorMessage` translates error codes (`name_already_claimed`, `poll_closed`, `claim_not_approved`, `invalid_token`, `member_inactive`, `not_found`, `forbidden`, `network_error`) into clear user-facing language.
+
+## 3. Storage & Device Identity
+- **Key Convention**: Device member identity is stored under `pollapp.member.<joinCode>` as `{ memberToken, memberId, displayName }`.
+- **Fault-Tolerant Fallback**:
+  - All access to `window.localStorage` is wrapped in `try/catch`.
+  - If `localStorage` throws (e.g. storage disabled, private browsing, quota exceeded), an in-memory Map fallback is seamlessly used.
+  - Corrupt or malformed JSON is caught and treated as `null` (empty).
+- **Session Revocation**:
+  - If a member token returns `401 Unauthorized` or `invalid_token` during identity verification or voting, the stored identity for that join code is immediately cleared from storage and the user is prompted to claim their name again.
+
+## 4. UI/UX & Accessibility
+- **Design System & Layout**:
+  - Mobile-first layout centered in a single column with `max-w-md` (~28rem) and neutral slate/zinc palette accented with indigo.
+  - Minimum tap target size of 44px on all interactive buttons and inputs.
+  - Visible focus rings (`focus-visible:ring-2`) and disabled styling.
+  - Live regions (`role="alert"`, `aria-live="assertive"`) announce errors and status updates.
+- **Timezone & Deadline Calculations**:
+  - Datetimes are rendered in the member's local time zone via `Intl.DateTimeFormat`.
+  - `describeDeadline` calculates human-friendly relative summaries ("Due in 2 hours", "Due tomorrow at 5:00 PM", "Deadline passed 3 hours ago").
+- **Real-Time Polling for Pending Claims**:
+  - When a name claim is `pending` approval from the creator, the page automatically re-checks `GET /api/v1/me` every 10 seconds and stops polling when the component unmounts.
+
+
 
 
