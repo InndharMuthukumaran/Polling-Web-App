@@ -1,6 +1,6 @@
 # Project Brief: Advanced Group Polling (working title)
 
-Version 6. Last updated: 29 Sep 2026. Status: Backend complete and verified (Parts 1, 2A, 2B, 2C; 42 tests). Part 3A/3B (web app) prompts ready; 3A is next.
+Version 7. Last updated: 29 Sep 2026. Status: Backend complete and verified (42 tests). Web app member side (3A) built and verified (25 frontend tests). A small cleanup prompt and Part 3B (creator pages) are next.
 
 ## 0. How Claude should use this document
 
@@ -103,7 +103,7 @@ Example: the goal is to complete an assignment. Option 1 "Yes" is the target, op
 2A. Identity layer: admin and member tokens, join codes, name claiming with approve and reset, member management, migration and tests. No HTTP. DONE (verified: 24 tests).
 2B. HTTP API: FastAPI endpoints for groups, members, joining, polls, voting, status and history, with error handling and tests. DONE (22 endpoints, verified end to end on a running server: 39 tests).
 2C. Three small fixes found in review: a vote could be accepted in the instant after a poll was closed (stale read), a 403 message revealed group names, and the API defaulted the deadline-time mode to "first" instead of the agreed "last". DONE (verified: 42 tests; each new test fails when its fix is undone).
-3A. Web app, member side: React foundation, API client, the join page and the shared poll page (claim a name, vote, see your own history). Prompt ready (part-3a-prompt.md).
+3A. Web app, member side: React foundation, API client, the join page and the shared poll page (claim a name, vote, see your own history). DONE (typecheck, build and 25 tests pass; the API client was also run against the live backend and matched). Small cleanup prompt ready (part-3a-cleanup-prompt.md).
 3B. Web app, creator side: create a group, member list management, create a poll, poll page with defaulter lists, history, share text and the close button. Prompt ready (part-3b-prompt.md). Run after 3A is reviewed.
 4. Reminders and AI: the external timer, due-reminder logic, description refining with confirmation, personalised messages, template fallback, quiet hours, the "everyone reached the target" notice, languages. Copy-paste text for WhatsApp.
 5. Bot support in the backend (new): bot credential, chat-to-group and platform-user-to-member links, outgoing messages.
@@ -162,3 +162,4 @@ Order confirmed by Inndhar on 29 Sep. The web app comes first because it is the 
 - 2026-09-29: Part 2B built and reviewed: 39 tests pass, full flow verified on a running server (create group, add members, claim, vote, status, history, close, permission checks, CORS). Review found two small issues, fixed by the Part 2C prompt.
 - 2026-09-29: Review of Part 2B found a third small issue (API default for the deadline-time mode) and it was added to the 2C prompt. Native in-chat polling agreed as the direction for the bots; part order updated and confirmed; React with Vite and Tailwind confirmed. Part 3 split into 3A and 3B; prompts written.
 - 2026-09-29: Part 2C built and reviewed: 42 tests pass three runs in a row on PostgreSQL, and each new test fails when its fix is removed. One small leftover: the member-vs-poll group mismatch error still includes both group IDs in its message; to be replaced with a generic message in the next backend prompt.
+- 2026-09-29: Part 3A reviewed: typecheck, build and 25 tests pass, no extra libraries, backend untouched, and the frontend API functions ran correctly against the real backend (claim, vote, toggle off, history, closed poll). Three small leftovers go into part-3a-cleanup-prompt.md: a committed build file, group IDs in one error message, and a checkbox-style indicator on single-choice polls.

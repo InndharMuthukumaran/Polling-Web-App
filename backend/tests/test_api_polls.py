@@ -448,3 +448,63 @@ def test_poll_completion_time_mode_defaults_and_validation(client):
     )
     assert res_invalid.status_code == 422
 
+
+def test_vote_poll_different_group_error_message_generic(client):
+    """
+    A member of group A calls the vote endpoint for a poll of group B:
+    asserts 403, code 'forbidden', and neither group's ID appears anywhere in the response body.
+    """
+    # 1. Group A with member Alice
+    g_a = client.post("/api/v1/groups", json={"name": "Group A"}).json()
+    gid_a = g_a["group_id"]
+    admin_tok_a = g_a["admin_token"]
+    join_code_a = g_a["join_code"]
+
+    m_res = client.post(
+        f"/api/v1/groups/{gid_a}/members",
+        headers={"X-Admin-Token": admin_tok_a},
+        json={"display_names": ["Alice"]},
+    )
+    alice_id = m_res.json()[0]["id"]
+    alice_token = client.post(
+        f"/api/v1/join/{join_code_a}/claim",
+        json={"member_id": alice_id},
+    ).json()["member_token"]
+
+    # 2. Group B with a poll
+    g_b = client.post("/api/v1/groups", json={"name": "Group B"}).json()
+    gid_b = g_b["group_id"]
+    admin_tok_b = g_b["admin_token"]
+
+    p_b = client.post(
+        f"/api/v1/groups/{gid_b}/polls",
+        headers={"X-Admin-Token": admin_tok_b},
+        json={
+            "name": "Group B Poll",
+            "allow_multiple": False,
+            "options": [
+                {"label": "Opt 1", "role": "target"},
+                {"label": "Opt 2", "role": "not_yet"},
+            ],
+        },
+    ).json()
+    poll_b_id = p_b["id"]
+    opt_b_id = p_b["options"][0]["id"]
+
+    # 3. Alice (group A) attempts to vote on Group B's poll
+    v_res = client.post(
+        f"/api/v1/polls/{poll_b_id}/vote",
+        headers={"X-Member-Token": alice_token},
+        json={"option_id": opt_b_id},
+    )
+    assert v_res.status_code == 403
+    v_data = v_res.json()
+    assert v_data["error"]["code"] == "forbidden"
+    assert v_data["error"]["message"] == "This poll belongs to a different group."
+
+    # Neither group's ID appears anywhere in the response body
+    response_text = v_res.text
+    assert gid_a not in response_text
+    assert gid_b not in response_text
+
+

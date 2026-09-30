@@ -153,8 +153,6 @@ def require_approved_member_for_poll(
         raise PollNotFoundError(f"Poll {pid} not found.")
 
     if member.group_id != poll.group_id:
-        raise MemberGroupMismatchError(
-            f"Member belongs to group {member.group_id}, but poll belongs to group {poll.group_id}."
-        )
+        raise MemberGroupMismatchError("This poll belongs to a different group.")
 
     return poll, member

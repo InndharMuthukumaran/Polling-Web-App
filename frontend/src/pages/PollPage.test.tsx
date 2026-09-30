@@ -256,4 +256,57 @@ describe('PollPage', () => {
     // Verify identity was removed from storage
     expect(getMemberIdentity('lunchcode')).toBeNull();
   });
+
+  it('renders radio indicators for single-choice and checkbox indicators for multiple-choice', async () => {
+    saveMemberIdentity('lunchcode', {
+      memberToken: 'tok-alice',
+      memberId: 'mem-1',
+      displayName: 'Alice',
+    });
+
+    vi.mocked(endpoints.getMe).mockResolvedValue({
+      member_id: 'mem-1',
+      display_name: 'Alice',
+      group_id: 'grp-1',
+      group_name: 'Engineers',
+      claim_status: 'approved',
+    });
+    vi.mocked(endpoints.getMyPollHistory).mockResolvedValue({
+      selected_option_ids: [],
+      history: [],
+    });
+
+    // 1. Single-choice poll (allow_multiple: false)
+    vi.mocked(endpoints.getPublicPoll).mockResolvedValue({
+      ...mockPoll,
+      allow_multiple: false,
+    });
+
+    const { unmount } = renderPollPage('poll-123');
+
+    await waitFor(() => {
+      expect(screen.getByText('Pizza Place')).toBeInTheDocument();
+    });
+
+    expect(document.querySelectorAll('[data-indicator="radio"]').length).toBe(2);
+    expect(document.querySelectorAll('[data-indicator="checkbox"]').length).toBe(0);
+
+    unmount();
+
+    // 2. Multiple-choice poll (allow_multiple: true)
+    vi.mocked(endpoints.getPublicPoll).mockResolvedValue({
+      ...mockPoll,
+      allow_multiple: true,
+    });
+
+    renderPollPage('poll-123');
+
+    await waitFor(() => {
+      expect(screen.getByText('Pizza Place')).toBeInTheDocument();
+    });
+
+    expect(document.querySelectorAll('[data-indicator="checkbox"]').length).toBe(2);
+    expect(document.querySelectorAll('[data-indicator="radio"]').length).toBe(0);
+  });
 });
+

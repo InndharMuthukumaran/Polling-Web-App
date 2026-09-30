@@ -40,3 +40,7 @@ htmlcov/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# TypeScript build info
+*.tsbuildinfo
+

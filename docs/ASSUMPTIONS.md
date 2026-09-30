@@ -220,6 +220,23 @@ This section captures assumptions and design decisions made for Part 3A (Fronten
 - **Real-Time Polling for Pending Claims**:
   - When a name claim is `pending` approval from the creator, the page automatically re-checks `GET /api/v1/me` every 10 seconds and stops polling when the component unmounts.
 
+# Assumptions and Design Decisions (Part 3A cleanup)
+
+This section documents the three targeted cleanup fixes applied following review of Part 3A:
+
+## 1. Build Artifact Untracking
+- **Problem**: `frontend/tsconfig.tsbuildinfo` is a generated TypeScript incremental build artifact and was mistakenly committed to git.
+- **Resolution**: Added `*.tsbuildinfo` to the root `.gitignore` and removed `frontend/tsconfig.tsbuildinfo` from the git cache (`git rm --cached frontend/tsconfig.tsbuildinfo`) without deleting the local file.
+
+## 2. Generic Error Message for Cross-Group Poll Access
+- **Problem**: In `backend/app/api/deps.py`, when an approved member attempted to access a poll belonging to another group, the error message previously exposed both group UUIDs (`Member belongs to group {member.group_id}, but poll belongs to group {poll.group_id}.`).
+- **Resolution**: Replaced the message with static text: `"This poll belongs to a different group."`. The exception type (`MemberGroupMismatchError`), HTTP status (403), and error code (`"forbidden"`) remain identical. Added `test_vote_poll_different_group_error_message_generic` in `backend/tests/test_api_polls.py` asserting 403, `forbidden`, and absence of either group ID in the response body.
+
+## 3. Radio Indicator for Single-Choice Polls
+- **Problem**: `frontend/src/pages/PollPage.tsx` previously used a square checkbox indicator for both single-choice and multiple-choice polls.
+- **Resolution**: Single-choice polls (`allow_multiple == false`) now render a round radio indicator (`rounded-full` with an inner filled circle dot when selected, and `data-indicator="radio"`). Multiple-choice polls retain the square checkbox (`rounded-md` with checkmark icon and `data-indicator="checkbox"`). Deselection behavior remains intact. Added a unit test in `frontend/src/pages/PollPage.test.tsx` asserting indicator distinction.
+
+
 
 
 

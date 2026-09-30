@@ -473,20 +473,38 @@ export const PollPage: React.FC = () => {
                       } ${isVoting ? 'opacity-70 cursor-not-allowed' : ''}`}
                     >
                       <span className="text-base">{option.label}</span>
-                      <span
-                        className={`w-5 h-5 rounded-md border flex items-center justify-center transition-colors shrink-0 ${
-                          isSelected
-                            ? 'border-indigo-600 bg-indigo-600 text-white'
-                            : 'border-neutral-300'
-                        }`}
-                        aria-hidden="true"
-                      >
-                        {isSelected && (
-                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                          </svg>
-                        )}
-                      </span>
+                      {/* Indicator: Radio for single-choice, Checkbox for multiple-choice */}
+                      {poll.allow_multiple ? (
+                        <span
+                          data-indicator="checkbox"
+                          className={`w-5 h-5 rounded-md border flex items-center justify-center transition-colors shrink-0 ${
+                            isSelected
+                              ? 'border-indigo-600 bg-indigo-600 text-white'
+                              : 'border-neutral-300'
+                          }`}
+                          aria-hidden="true"
+                        >
+                          {isSelected && (
+                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                            </svg>
+                          )}
+                        </span>
+                      ) : (
+                        <span
+                          data-indicator="radio"
+                          className={`w-5 h-5 rounded-full border flex items-center justify-center transition-colors shrink-0 ${
+                            isSelected
+                              ? 'border-indigo-600 bg-white'
+                              : 'border-neutral-300'
+                          }`}
+                          aria-hidden="true"
+                        >
+                          {isSelected && (
+                            <span className="w-2.5 h-2.5 rounded-full bg-indigo-600" />
+                          )}
+                        </span>
+                      )}
                     </button>
                   );
                 })}
