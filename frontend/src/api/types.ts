@@ -32,6 +32,11 @@ export interface MeResponse {
   claim_status: 'approved' | 'pending' | 'unclaimed';
 }
 
+export interface ReleaseClaimResponse {
+  status: string;
+}
+
+
 export interface MemberPollSummary {
   id: string;
   name: string;

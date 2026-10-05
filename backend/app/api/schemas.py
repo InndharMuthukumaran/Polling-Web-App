@@ -128,6 +128,11 @@ class MemberPollSummaryResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ReleaseClaimResponse(BaseModel):
+    status: str = "unclaimed"
+
+
+
 # ---------------------------------------------------------------------------
 # Poll Creation & Details Schemas
 # ---------------------------------------------------------------------------

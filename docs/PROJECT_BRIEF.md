@@ -1,6 +1,6 @@
 # Project Brief: Advanced Group Polling (working title)
 
-Version 7. Last updated: 29 Sep 2026. Status: Backend complete and verified (42 tests). Web app member side (3A) built and verified (25 frontend tests). A small cleanup prompt and Part 3B (creator pages) are next.
+Version 10. Last updated: 5 Oct 2026. Status: Backend and web app (member and creator sides) built and verified: 43 backend tests, 55 frontend tests, and a full end-to-end run in real browsers. A runnable demo exists. Inndhar's local testing found two name-claiming problems; the Part 3C prompt fixes them. 3C has been written but NOT yet run. Inndhar then asked for a roster-and-fields redesign (parts R1 to R5). Order: 3C, R1 to R5, a short deployment step, then Part 4 (reminders and AI).
 
 ## 0. How Claude should use this document
 
@@ -39,6 +39,11 @@ Example: the goal is to complete an assignment. Option 1 "Yes" is the target, op
 - Deadlines are supported.
 - Multiple languages are supported.
 - Results can be exported.
+
+**Groups, members and fields (new requirement, 5 Oct)**
+- Excel (bulk) upload for adding members. Multiple attributes instead of only names, because several people can share a name (example: college placements with Register No, Name, resume link and other data).
+- The creator adds fields to a group dynamically, adds rows manually or by Excel upload, and can give each field a default value.
+- Two levels of data: the group stores the master data for everyone once; when creating a poll the creator can include existing group fields and also add new fields that exist only in that poll (example: willingness to company ABC). The unique identifier field (for example Register No) must be part of every poll.
 
 **Groups and names**
 - Each group has its own display names, like WhatsApp's per-group "about" that can differ for each group.
@@ -81,6 +86,7 @@ Example: the goal is to complete an assignment. Option 1 "Yes" is the target, op
 - Render free tier sleeps after 15 minutes, so use an external timer (UptimeRobot, cron-job.org or similar) calling a "send due reminders" address every 5 minutes. This keeps the server awake and drives reminders, with the database as the source of truth for what is due; missed reminders go out on the next tick. Move to a paid always-on backend before real users.
 - No Redis in the first version. Write the reminder code as a self-contained piece so a queue can be added later.
 - Do not send real member names to the LLM (the free Gemini tier may use content to improve Google's products). The LLM writes text with a placeholder like {name}; the app fills it in. Keep the LLM behind one swappable piece of code, with a fixed-template fallback if it fails.
+- Roster design details (Claude's proposals, not yet confirmed): field types text, number, choice list and link; "default value" fills a blank cell on a manual add or an upload, and gives existing rows a value when a new field is added later; roster fields are creator-side data (shown in the creator's results table, copy text, export and reminders), not shown to other members; poll-only fields are optional extra questions members answer beside the vote (saved with a separate Save button, editable until the poll closes, only the last-updated time is kept); roster values are read live while a poll is open; file parsing is done on the backend with size and row limits; members claim their row by typing the identifier, with the public name list off by default for uploaded rosters and kept as a setting for small groups; keep roster data visible to the creator only and add a way to delete a group's data (India's DPDP Act is worth reading if used beyond small groups).
 - Identity is honor-system level; phone verification could be an optional later upgrade.
 - Part 2 identity mechanics (chosen by Claude, not yet confirmed): no user accounts; creating a group returns a one-time admin token (whoever holds it is the creator for that group, one token per group, stored only as a hash); joining uses an unguessable join code; claiming a name returns a one-time member token that the device stores; the group has a setting "require claim approval" (off by default: first claim wins; on: claims stay pending until the creator approves); resetting a claim frees the name but keeps its votes and history, so the next claimant inherits them; a poll link also reveals the group's join code, so anyone with a poll link can join the group.
 - Show current status alongside history ("Yes: first 2:00, last 4:00, currently not selected").
@@ -103,8 +109,15 @@ Example: the goal is to complete an assignment. Option 1 "Yes" is the target, op
 2A. Identity layer: admin and member tokens, join codes, name claiming with approve and reset, member management, migration and tests. No HTTP. DONE (verified: 24 tests).
 2B. HTTP API: FastAPI endpoints for groups, members, joining, polls, voting, status and history, with error handling and tests. DONE (22 endpoints, verified end to end on a running server: 39 tests).
 2C. Three small fixes found in review: a vote could be accepted in the instant after a poll was closed (stale read), a 403 message revealed group names, and the API defaulted the deadline-time mode to "first" instead of the agreed "last". DONE (verified: 42 tests; each new test fails when its fix is undone).
-3A. Web app, member side: React foundation, API client, the join page and the shared poll page (claim a name, vote, see your own history). DONE (typecheck, build and 25 tests pass; the API client was also run against the live backend and matched). Small cleanup prompt ready (part-3a-cleanup-prompt.md).
-3B. Web app, creator side: create a group, member list management, create a poll, poll page with defaulter lists, history, share text and the close button. Prompt ready (part-3b-prompt.md). Run after 3A is reviewed.
+3A. Web app, member side: React foundation, API client, the join page and the shared poll page (claim a name, vote, see your own history). DONE (typecheck, build and 25 tests pass; the API client was also run against the live backend and matched). Cleanup done (build file untracked, generic group-mismatch error, radio indicator for single choice).
+3B. Web app, creator side: create a group, member list management, create a poll, poll page with defaulter lists, history, share text and the close button. DONE (55 frontend tests; verified end to end in real browsers with a creator and four members).
+3C. Name-claiming fixes found in local testing: the name list stayed stale after a conflict, a second tab in the same browser silently overwrote the saved identity (locking the first name), and members had no way to release a wrong name. Adds a member self-release endpoint plus frontend fixes. Prompt ready (part-3c-prompt.md).
+R. Roster and fields redesign (Inndhar's requirement, 5 Oct; steps proposed by Claude):
+   R1 (backend): group fields with type, required, default value and one unique identifier field; members hold values for each field; duplicate names allowed; existing names become the first field.
+   R2 (backend): upload of .xlsx and .csv with column mapping, a preview with row-level problems, bulk add, a downloadable template, and an option to create fields from the sheet's headers.
+   R3 (backend): poll-level columns (identifier always included, other group fields optional) and poll-only fields that members answer, with the creator's results table.
+   R4 (frontend): roster table with a field manager, add and edit rows, upload wizard.
+   R5 (frontend): claim by typing the identifier, poll creation with field choices and poll-only fields, member answer form, results table and copy text.
 4. Reminders and AI: the external timer, due-reminder logic, description refining with confirmation, personalised messages, template fallback, quiet hours, the "everyone reached the target" notice, languages. Copy-paste text for WhatsApp.
 5. Bot support in the backend (new): bot credential, chat-to-group and platform-user-to-member links, outgoing messages.
 6. Telegram bot: native creation, voting, private defaulter list.
@@ -121,6 +134,7 @@ Order confirmed by Inndhar on 29 Sep. The web app comes first because it is the 
 4. Data retention and deletion rules for history and member lists.
 5. What happens if a creator loses the admin token (no recovery exists yet), and how a second admin is added (they would have to share the token for now).
 6. Is it acceptable that a poll link also lets a visitor join the group?
+6b. Is a poll-only field such as "willingness to ABC" the poll's main vote (the options that drive target and defaulter lists), or an extra field answered next to a vote? Claude assumed both can exist: the main vote stays as it is, and poll-only fields are extras.
 7. The API does not return option roles after a poll is created, so the creator's poll page cannot show which options count as the target. Add an endpoint later if wanted.
 
 ## 7. Platform and hosting notes (as of Sep 2026, verify before relying)
@@ -163,3 +177,6 @@ Order confirmed by Inndhar on 29 Sep. The web app comes first because it is the 
 - 2026-09-29: Review of Part 2B found a third small issue (API default for the deadline-time mode) and it was added to the 2C prompt. Native in-chat polling agreed as the direction for the bots; part order updated and confirmed; React with Vite and Tailwind confirmed. Part 3 split into 3A and 3B; prompts written.
 - 2026-09-29: Part 2C built and reviewed: 42 tests pass three runs in a row on PostgreSQL, and each new test fails when its fix is removed. One small leftover: the member-vs-poll group mismatch error still includes both group IDs in its message; to be replaced with a generic message in the next backend prompt.
 - 2026-09-29: Part 3A reviewed: typecheck, build and 25 tests pass, no extra libraries, backend untouched, and the frontend API functions ran correctly against the real backend (claim, vote, toggle off, history, closed poll). Three small leftovers go into part-3a-cleanup-prompt.md: a committed build file, group IDs in one error message, and a checkbox-style indicator on single-choice polls.
+- 2026-09-30: Part 3B reviewed. Typecheck, build and 55 frontend tests pass; 43 backend tests pass. Ran the whole app in real headless browsers (creator plus four members): group creation, member list, poll creation with a past deadline, claiming names, voting, toggling a vote off and on, history, late marking, Copy defaulters (Ben and Diya), the all-reached banner after auto-refresh, closing, and the closed view for a member all worked, with no browser errors. Screens are clean and mobile friendly. Known gaps: no deployment config yet (the web app needs a rewrite rule on Vercel so links like /p/<id> open directly); reminders are plain copy-paste text; option roles are not shown to the creator after a poll is created.
+- 2026-09-30: Inndhar finished basic local testing. Two issues reproduced in a headless browser and confirmed as real (not local-only): after a claim conflict the taken name stayed selectable, and three tabs of one browser share one saved identity per group, so the last claim overwrites the others (the earlier names stay claimed on the server and need a creator Reset). One browser is meant to be one person per group; the fix adds a clear message, a self-service switch-name action and protection against overwriting. Part 3C prompt written.
+- 2026-10-05: Inndhar had not yet run Part 3C (GitHub showed no new commit). Inndhar asked for Excel upload and dynamic fields; refined idea of group master data plus per-poll field choices and poll-only fields, with the identifier required in every poll. Plan R1 to R5 recorded; 3C should still run first because it fixes the identity-overwrite problem and adds switch name, which the redesign keeps.

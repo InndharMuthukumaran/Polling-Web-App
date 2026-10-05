@@ -6,6 +6,7 @@ import type {
   MemberPollMeResponse,
   MemberPollSummary,
   PublicPollResponse,
+  ReleaseClaimResponse,
   VoteResponse,
 } from './types';
 
@@ -28,6 +29,13 @@ export async function claimMember(
 export async function getMe(memberToken: string): Promise<MeResponse> {
   return request<MeResponse>('/api/v1/me', {
     method: 'GET',
+    token: memberToken,
+  });
+}
+
+export async function releaseClaim(memberToken: string): Promise<ReleaseClaimResponse> {
+  return request<ReleaseClaimResponse>('/api/v1/me/release', {
+    method: 'POST',
     token: memberToken,
   });
 }

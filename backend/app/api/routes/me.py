@@ -5,8 +5,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_member, get_db, require_approved_member
-from app.api.schemas import MemberPollSummaryResponse, MeResponse
+from app.api.schemas import MemberPollSummaryResponse, MeResponse, ReleaseClaimResponse
 from app.models import Group, Member, Poll
+from app.services.identity import release_own_claim
 
 router = APIRouter(prefix="/me", tags=["Me"])
 
@@ -28,6 +29,16 @@ def get_me(
     )
 
 
+@router.post("/release", response_model=ReleaseClaimResponse)
+def release_my_claim(
+    member: Member = Depends(get_current_member),
+    session: Session = Depends(get_db),
+) -> ReleaseClaimResponse:
+    """Release member's own claim. Works for both pending and approved members."""
+    release_own_claim(session, member)
+    return ReleaseClaimResponse(status="unclaimed")
+
+
 @router.get("/polls", response_model=list[MemberPollSummaryResponse])
 def get_my_polls(
     member: Member = Depends(require_approved_member),
@@ -40,3 +51,4 @@ def get_my_polls(
         .order_by(Poll.created_at.desc())
     ).all()
     return [MemberPollSummaryResponse.model_validate(p) for p in polls]
+

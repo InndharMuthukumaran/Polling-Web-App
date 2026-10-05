@@ -21,6 +21,7 @@ vi.mock('../api/endpoints', () => ({
   castVote: vi.fn(),
   deleteVote: vi.fn(),
   getMyPollHistory: vi.fn(),
+  releaseClaim: vi.fn(),
 }));
 
 describe('PollPage', () => {
@@ -308,5 +309,61 @@ describe('PollPage', () => {
     expect(document.querySelectorAll('[data-indicator="checkbox"]').length).toBe(2);
     expect(document.querySelectorAll('[data-indicator="radio"]').length).toBe(0);
   });
+
+  it('"Not you? Switch name" on PollPage asks for confirmation and releases claim', async () => {
+    saveMemberIdentity('lunchcode', {
+      memberToken: 'tok-alice',
+      memberId: 'mem-1',
+      displayName: 'Alice',
+    });
+    vi.mocked(endpoints.getPublicPoll).mockResolvedValue(mockPoll);
+    vi.mocked(endpoints.getMe).mockResolvedValue({
+      member_id: 'mem-1',
+      display_name: 'Alice',
+      group_id: 'grp-1',
+      group_name: 'Engineers',
+      claim_status: 'approved',
+    });
+    vi.mocked(endpoints.getMyPollHistory).mockResolvedValue({
+      selected_option_ids: [],
+      history: [],
+    });
+    vi.mocked(endpoints.getJoinInfo).mockResolvedValue(mockGroup);
+    vi.mocked(endpoints.releaseClaim).mockResolvedValue({ status: 'unclaimed' });
+
+    renderPollPage('poll-123');
+
+    await waitFor(() => {
+      expect(screen.getByText('Voting as')).toBeInTheDocument();
+      expect(screen.getByText('Alice')).toBeInTheDocument();
+    });
+
+    // Find and click "Not you? Switch name"
+    const switchBtn = screen.getByRole('button', { name: /Not you\? Switch name/i });
+    await userEvent.click(switchBtn);
+
+    // Confirmation message appears
+    expect(
+      screen.getByText(
+        'This frees the name Alice so you or someone else can claim it again. Votes already made stay with that name.',
+      ),
+    ).toBeInTheDocument();
+
+    // Confirm switch
+    const confirmBtn = screen.getByRole('button', { name: /Confirm switch/i });
+    await userEvent.click(confirmBtn);
+
+    await waitFor(() => {
+      expect(endpoints.releaseClaim).toHaveBeenCalledWith('tok-alice');
+    });
+
+    expect(getMemberIdentity('lunchcode')).toBeNull();
+
+    // Switched back to inline claim list
+    await waitFor(() => {
+      expect(screen.getByText('Choose your name')).toBeInTheDocument();
+    });
+  });
 });
+
 

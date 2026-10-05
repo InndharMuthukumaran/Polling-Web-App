@@ -9,6 +9,8 @@ export interface NameClaimListProps {
   isClaiming?: boolean;
   error?: string | null;
   className?: string;
+  selectedId?: string | null;
+  onSelectId?: (id: string | null) => void;
 }
 
 export const NameClaimList: React.FC<NameClaimListProps> = ({
@@ -17,8 +19,33 @@ export const NameClaimList: React.FC<NameClaimListProps> = ({
   isClaiming = false,
   error = null,
   className = '',
+  selectedId: controlledSelectedId,
+  onSelectId,
 }) => {
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [internalSelectedId, setInternalSelectedId] = useState<string | null>(null);
+
+  const selectedId = controlledSelectedId !== undefined ? controlledSelectedId : internalSelectedId;
+  const setSelectedId = (id: string | null) => {
+    if (onSelectId) onSelectId(id);
+    setInternalSelectedId(id);
+  };
+
+  // If selected member is taken after reload, or missing, clear selection
+  React.useEffect(() => {
+    if (selectedId) {
+      const current = members.find((m) => m.id === selectedId);
+      if (!current || current.taken) {
+        setSelectedId(null);
+      }
+    }
+  }, [members, selectedId]);
+
+  // If conflict error occurs, clear selection
+  React.useEffect(() => {
+    if (error && error.includes('was just taken by someone else')) {
+      setSelectedId(null);
+    }
+  }, [error]);
 
   const selectedMember = members.find((m) => m.id === selectedId);
 
@@ -26,6 +53,7 @@ export const NameClaimList: React.FC<NameClaimListProps> = ({
     if (!selectedId) return;
     await onClaim(selectedId);
   };
+
 
   return (
     <div className={`space-y-4 ${className}`.trim()}>

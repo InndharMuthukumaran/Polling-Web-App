@@ -267,6 +267,49 @@ This section documents the assumptions, choices, and architectural decisions mad
   - `AdminPollPage` refreshes status every 15 seconds while the poll is open and the document is visible (`document.visibilityState === 'visible'`).
   - Refresh occurs immediately after administrative actions (closing poll, approving claims, resetting claims, adding members).
 
+# Assumptions and Design Decisions (Part 3C: Name-Claiming Fixes)
+
+This section documents assumptions and architectural decisions made for Part 3C (Name-claiming flow fixes).
+
+## 1. Member Self-Release Backend Service & Endpoint
+- **Service Function**:
+  - `release_own_claim(session, member) -> Member` in `backend/app/services/identity.py` delegates directly to `reset_claim(session, member.group_id, member.id)` to avoid duplicated state management.
+  - Transitions `claim_status` back to `'unclaimed'`, nulls `member_token_hash` and `claimed_at`, and preserves all existing votes and history for subsequent claimants.
+- **Endpoint**:
+  - `POST /api/v1/me/release` uses `get_current_member` dependency (requires `X-Member-Token`), permitting self-release for both `pending` and `approved` members without requiring approval.
+  - Returns HTTP 200 with `{"status": "unclaimed"}` on success.
+  - Returns HTTP 401 `missing_token` or `invalid_token` when header is absent or invalid.
+
+## 2. Claim Conflict Handling & Freshness
+- **Conflict Handling**:
+  - When `claimMember` fails with error code `name_already_claimed`, the member list is immediately refreshed via `getJoinInfo(joinCode)`, the active selection is cleared, and user-facing message `"{name} was just taken by someone else. Please pick another name."` is shown.
+  - Roster entries with `taken: true` are rendered disabled with strikethrough.
+  - `NameClaimList` detects when a selected member becomes taken following reload and automatically resets selection.
+- **Focus & Visibility Freshness**:
+  - While the claim list is visible (`!identity`), event listeners on `document.addEventListener('visibilitychange')` (when `visibilityState === 'visible'`) and `window.addEventListener('focus')` reload `getJoinInfo(joinCode)`.
+  - No background polling timers are used.
+
+## 3. Browser Identity Protection & Cross-Tab Sync
+- **Overwrite Protection**:
+  - Immediately prior to invoking `claimMember`, `getMemberIdentity(joinCode)` is re-read from storage.
+  - If an identity exists (e.g. another tab claimed in the meantime), `claimMember` is aborted, the recognized view is loaded, and notice `"This browser is already signed in as {name}."` is displayed.
+- **Cross-Tab Storage Synchronization**:
+  - Both `JoinPage` and `PollPage` register a window `'storage'` event listener targeting `pollapp.member.<joinCode>`.
+  - When another tab adds or alters the stored identity, the page transitions to the recognized view and refreshes poll/vote status.
+  - When another tab clears the stored identity, the page transitions back to the claim list and refreshes the member roster.
+  - Listeners are cleanly unregistered on component unmount.
+
+## 4. Self-Service Switch Name Action
+- **UI & Flow**:
+  - Reusable `SwitchNameAction` component is integrated on the recognized member view of `JoinPage` and on the `"Voting as {name}"` header line of `PollPage` (as well as the pending claim view).
+  - Confirmation prompt warns: `"This frees the name {name} so you or someone else can claim it again. Votes already made stay with that name."`
+  - On confirm: calls `releaseClaim(memberToken)`, purges `clearMemberIdentity(joinCode)`, and refreshes member list.
+  - If the release API returns HTTP 401 (e.g. creator already reset the claim), local identity is cleared and the claim list is presented.
+  - If the release API fails due to network or other errors, an error message is displayed and the local identity is retained.
+- **Rule Explanation**:
+  - Recognized view includes helper text: `"This browser is signed in as {name}. To let someone else use this device, tap 'Not you? Switch name'."`
+
+
 
 
 

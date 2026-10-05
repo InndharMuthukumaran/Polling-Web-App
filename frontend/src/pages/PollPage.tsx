@@ -28,6 +28,7 @@ import { Banner } from '../components/Banner';
 import { Spinner } from '../components/Spinner';
 import { Badge } from '../components/Badge';
 import { NameClaimList } from '../components/NameClaimList';
+import { SwitchNameAction } from '../components/SwitchNameAction';
 
 export const PollPage: React.FC = () => {
   const { pollId } = useParams<{ pollId: string }>();
@@ -42,9 +43,12 @@ export const PollPage: React.FC = () => {
   // Member identity & claim state
   const [identity, setIdentity] = useState<StoredMemberIdentity | null>(null);
   const [claimStatus, setClaimStatus] = useState<'approved' | 'pending' | null>(null);
+  const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
   const [isClaiming, setIsClaiming] = useState<boolean>(false);
   const [claimError, setClaimError] = useState<string | null>(null);
   const [isCheckingApproval, setIsCheckingApproval] = useState<boolean>(false);
+  const [alreadySignedInNote, setAlreadySignedInNote] = useState<string | null>(null);
+
 
   // Voting state
   const [selectedOptionIds, setSelectedOptionIds] = useState<string[]>([]);
@@ -182,12 +186,91 @@ export const PollPage: React.FC = () => {
     };
   }, [claimStatus, identity, poll, checkApproval]);
 
+  // Keep list fresh: while claim list is showing (!identity), reload on visibilitychange / focus
+  useEffect(() => {
+    if (identity || !poll?.join_code) return;
+
+    const reloadMembers = async () => {
+      try {
+        const groupInfo = await getJoinInfo(poll.join_code);
+        setGroupMembers(groupInfo.members);
+      } catch {
+        // ignore
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        reloadMembers();
+      }
+    };
+
+    const handleFocus = () => {
+      reloadMembers();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, [identity, poll?.join_code]);
+
+  // Other tabs follow along: listen to window storage event for group key
+  useEffect(() => {
+    if (!poll?.join_code) return;
+    const targetKey = `pollapp.member.${poll.join_code}`;
+
+    const handleStorage = async (e: StorageEvent) => {
+      if (e.key === targetKey || e.key === null) {
+        const stored = getMemberIdentity(poll.join_code);
+        if (stored) {
+          setIdentity(stored);
+          setClaimError(null);
+          setAlreadySignedInNote(null);
+          await checkApproval(stored.memberToken, poll.join_code);
+        } else {
+          setIdentity(null);
+          setClaimStatus(null);
+          setSelectedOptionIds([]);
+          setHistory([]);
+          setSelectedMemberId(null);
+          setAlreadySignedInNote(null);
+          try {
+            const groupInfo = await getJoinInfo(poll.join_code);
+            setGroupMembers(groupInfo.members);
+          } catch {
+            // ignore
+          }
+        }
+      }
+    };
+
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, [poll?.join_code, checkApproval]);
+
   // Handle inline claim
   const handleClaim = async (memberId: string) => {
     if (!poll) return;
 
+    // Never overwrite an existing identity: re-read getMemberIdentity right before claim
+    const existing = getMemberIdentity(poll.join_code);
+    if (existing) {
+      setIdentity(existing);
+      setAlreadySignedInNote(`This browser is already signed in as ${existing.displayName}.`);
+      setClaimError(null);
+      await checkApproval(existing.memberToken, poll.join_code);
+      return;
+    }
+
     setIsClaiming(true);
     setClaimError(null);
+    setAlreadySignedInNote(null);
 
     try {
       const result = await claimMember(poll.join_code, memberId);
@@ -208,11 +291,44 @@ export const PollPage: React.FC = () => {
         await loadMemberVotesAndHistory(poll.id, result.member_token);
       }
     } catch (err) {
-      setClaimError(getFriendlyErrorMessage(err));
+      if (err instanceof ApiError && err.code === 'name_already_claimed') {
+        const chosenMember = groupMembers.find((m) => m.id === memberId);
+        const chosenName = chosenMember ? chosenMember.display_name : 'That name';
+
+        setSelectedMemberId(null);
+        try {
+          const groupInfo = await getJoinInfo(poll.join_code);
+          setGroupMembers(groupInfo.members);
+        } catch {
+          // ignore
+        }
+        setClaimError(`${chosenName} was just taken by someone else. Please pick another name.`);
+      } else {
+        setClaimError(getFriendlyErrorMessage(err));
+      }
     } finally {
       setIsClaiming(false);
     }
   };
+
+  const handleSwitchNameReleased = async () => {
+    setIdentity(null);
+    setClaimStatus(null);
+    setSelectedOptionIds([]);
+    setHistory([]);
+    setSelectedMemberId(null);
+    setAlreadySignedInNote(null);
+
+    if (poll?.join_code) {
+      try {
+        const groupInfo = await getJoinInfo(poll.join_code);
+        setGroupMembers(groupInfo.members);
+      } catch {
+        // ignore
+      }
+    }
+  };
+
 
   // Handle vote toggle (cast or remove)
   const handleToggleVote = async (optionId: string, isCurrentlySelected: boolean) => {
@@ -380,6 +496,8 @@ export const PollPage: React.FC = () => {
             </div>
             <NameClaimList
               members={groupMembers}
+              selectedId={selectedMemberId}
+              onSelectId={setSelectedMemberId}
               onClaim={handleClaim}
               isClaiming={isClaiming}
               error={claimError}
@@ -390,6 +508,10 @@ export const PollPage: React.FC = () => {
         {/* SECTION B: Claimed & Pending -> Waiting Panel */}
         {identity && claimStatus === 'pending' && (
           <Card className="space-y-4 text-center py-6">
+            {alreadySignedInNote && (
+              <Banner type="info">{alreadySignedInNote}</Banner>
+            )}
+
             <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mx-auto">
               <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -402,9 +524,12 @@ export const PollPage: React.FC = () => {
               <p className="text-sm text-neutral-600">
                 You claimed <span className="font-semibold text-neutral-900">{identity.displayName}</span>. Once approved by the creator, you can vote on this poll.
               </p>
+              <p className="text-xs text-neutral-500">
+                This browser is signed in as {identity.displayName}. To let someone else use this device, tap 'Not you? Switch name'.
+              </p>
             </div>
 
-            <div className="pt-2">
+            <div className="flex flex-col gap-2 pt-2 items-center">
               <Button
                 variant="primary"
                 fullWidth
@@ -413,6 +538,12 @@ export const PollPage: React.FC = () => {
               >
                 Check again
               </Button>
+              <SwitchNameAction
+                displayName={identity.displayName}
+                memberToken={identity.memberToken}
+                joinCode={poll.join_code}
+                onReleased={handleSwitchNameReleased}
+              />
             </div>
 
             <p className="text-xs text-neutral-400">
@@ -424,16 +555,32 @@ export const PollPage: React.FC = () => {
         {/* SECTION C: Recognized & Approved Member */}
         {identity && claimStatus === 'approved' && (
           <>
+            {alreadySignedInNote && (
+              <Banner type="info">{alreadySignedInNote}</Banner>
+            )}
+
             {/* Member Identity Chip */}
             <div className="flex items-center justify-between text-xs px-2 text-neutral-500">
-              <span>
-                Voting as <strong className="text-neutral-800">{identity.displayName}</strong>
-              </span>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span>
+                  Voting as <strong className="text-neutral-800">{identity.displayName}</strong>
+                </span>
+                <SwitchNameAction
+                  displayName={identity.displayName}
+                  memberToken={identity.memberToken}
+                  joinCode={poll.join_code}
+                  onReleased={handleSwitchNameReleased}
+                />
+              </div>
               <span>{poll.allow_multiple ? 'Multiple selections allowed' : 'Single selection'}</span>
             </div>
+            <p className="text-xs text-neutral-500 px-2">
+              This browser is signed in as {identity.displayName}. To let someone else use this device, tap 'Not you? Switch name'.
+            </p>
 
             {/* Voting Options Card */}
             <Card className="space-y-4">
+
               <div className="space-y-2">
                 {sortedOptions.map((option) => {
                   const isSelected = selectedOptionIds.includes(option.id);

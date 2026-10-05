@@ -21,9 +21,11 @@ import {
 import { formatDateTime } from '../lib/time';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
+import { Banner } from '../components/Banner';
 import { Spinner } from '../components/Spinner';
 import { Badge } from '../components/Badge';
 import { NameClaimList } from '../components/NameClaimList';
+import { SwitchNameAction } from '../components/SwitchNameAction';
 
 export const JoinPage: React.FC = () => {
   const { joinCode } = useParams<{ joinCode: string }>();
@@ -37,11 +39,13 @@ export const JoinPage: React.FC = () => {
   const [, setMemberProfile] = useState<MeResponse | null>(null);
   const [polls, setPolls] = useState<MemberPollSummary[]>([]);
 
+  const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
   const [isClaiming, setIsClaiming] = useState<boolean>(false);
   const [claimError, setClaimError] = useState<string | null>(null);
   const [isCheckingApproval, setIsCheckingApproval] = useState<boolean>(false);
+  const [alreadySignedInNote, setAlreadySignedInNote] = useState<string | null>(null);
 
-  // Check approval status for pending member
+  // Check approval status for pending/approved member
   const checkApproval = useCallback(
     async (token: string, silent = false) => {
       if (!silent) setIsCheckingApproval(true);
@@ -148,12 +152,90 @@ export const JoinPage: React.FC = () => {
     };
   }, [claimStatus, identity, checkApproval]);
 
+  // Keep list fresh: while claim list is showing (!identity), reload on visibilitychange / focus
+  useEffect(() => {
+    if (identity || !joinCode) return;
+
+    const reloadMembers = async () => {
+      try {
+        const refreshed = await getJoinInfo(joinCode);
+        setGroupInfo(refreshed);
+      } catch {
+        // ignore
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        reloadMembers();
+      }
+    };
+
+    const handleFocus = () => {
+      reloadMembers();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, [identity, joinCode]);
+
+  // Other tabs follow along: listen to window storage event for group key
+  useEffect(() => {
+    if (!joinCode) return;
+    const targetKey = `pollapp.member.${joinCode}`;
+
+    const handleStorage = async (e: StorageEvent) => {
+      if (e.key === targetKey || e.key === null) {
+        const stored = getMemberIdentity(joinCode);
+        if (stored) {
+          setIdentity(stored);
+          setClaimError(null);
+          setAlreadySignedInNote(null);
+          await checkApproval(stored.memberToken);
+        } else {
+          setIdentity(null);
+          setClaimStatus(null);
+          setMemberProfile(null);
+          setPolls([]);
+          setAlreadySignedInNote(null);
+          try {
+            const refreshed = await getJoinInfo(joinCode);
+            setGroupInfo(refreshed);
+          } catch {
+            // ignore
+          }
+        }
+      }
+    };
+
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, [joinCode, checkApproval]);
+
   // Claim name handler
   const handleClaim = async (memberId: string) => {
     if (!joinCode || !groupInfo) return;
 
+    // Never overwrite an existing identity: re-read getMemberIdentity right before claim
+    const existing = getMemberIdentity(joinCode);
+    if (existing) {
+      setIdentity(existing);
+      setAlreadySignedInNote(`This browser is already signed in as ${existing.displayName}.`);
+      setClaimError(null);
+      await checkApproval(existing.memberToken);
+      return;
+    }
+
     setIsClaiming(true);
     setClaimError(null);
+    setAlreadySignedInNote(null);
 
     try {
       const result = await claimMember(joinCode, memberId);
@@ -175,9 +257,41 @@ export const JoinPage: React.FC = () => {
         setPolls(myPolls);
       }
     } catch (err) {
-      setClaimError(getFriendlyErrorMessage(err));
+      if (err instanceof ApiError && err.code === 'name_already_claimed') {
+        const chosenMember = groupInfo.members.find((m) => m.id === memberId);
+        const chosenName = chosenMember ? chosenMember.display_name : 'That name';
+
+        setSelectedMemberId(null);
+        try {
+          const refreshed = await getJoinInfo(joinCode);
+          setGroupInfo(refreshed);
+        } catch {
+          // ignore
+        }
+        setClaimError(`${chosenName} was just taken by someone else. Please pick another name.`);
+      } else {
+        setClaimError(getFriendlyErrorMessage(err));
+      }
     } finally {
       setIsClaiming(false);
+    }
+  };
+
+  const handleSwitchNameReleased = async () => {
+    setIdentity(null);
+    setClaimStatus(null);
+    setMemberProfile(null);
+    setPolls([]);
+    setSelectedMemberId(null);
+    setAlreadySignedInNote(null);
+
+    if (joinCode) {
+      try {
+        const refreshed = await getJoinInfo(joinCode);
+        setGroupInfo(refreshed);
+      } catch {
+        // ignore
+      }
     }
   };
 
@@ -240,15 +354,32 @@ export const JoinPage: React.FC = () => {
         {/* State 1: Claimed & Approved */}
         {identity && claimStatus === 'approved' && (
           <Card className="space-y-6">
-            <div className="p-4 bg-emerald-50/80 border border-emerald-200 rounded-xl space-y-1">
-              <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-emerald-600" aria-hidden="true" />
-                <span className="text-xs font-bold uppercase tracking-wider text-emerald-800">
-                  Recognized Member
-                </span>
+            {alreadySignedInNote && (
+              <Banner type="info">{alreadySignedInNote}</Banner>
+            )}
+
+            <div className="p-4 bg-emerald-50/80 border border-emerald-200 rounded-xl space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-emerald-600" aria-hidden="true" />
+                  <span className="text-xs font-bold uppercase tracking-wider text-emerald-800">
+                    Recognized Member
+                  </span>
+                </div>
+                <SwitchNameAction
+                  displayName={identity.displayName}
+                  memberToken={identity.memberToken}
+                  joinCode={joinCode!}
+                  onReleased={handleSwitchNameReleased}
+                />
               </div>
+
               <p className="text-base text-neutral-900 font-semibold">
                 You are <span className="text-emerald-800">{identity.displayName}</span> in {groupInfo.group_name}
+              </p>
+
+              <p className="text-xs text-neutral-600">
+                This browser is signed in as {identity.displayName}. To let someone else use this device, tap 'Not you? Switch name'.
               </p>
             </div>
 
@@ -288,6 +419,10 @@ export const JoinPage: React.FC = () => {
         {/* State 2: Claimed & Pending */}
         {identity && claimStatus === 'pending' && (
           <Card className="space-y-5 text-center py-6">
+            {alreadySignedInNote && (
+              <Banner type="info">{alreadySignedInNote}</Banner>
+            )}
+
             <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mx-auto">
               <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -300,9 +435,12 @@ export const JoinPage: React.FC = () => {
               <p className="text-sm text-neutral-600">
                 You claimed <span className="font-semibold text-neutral-900">{identity.displayName}</span>. Once approved by the creator, you can vote and view poll results.
               </p>
+              <p className="text-xs text-neutral-500">
+                This browser is signed in as {identity.displayName}. To let someone else use this device, tap 'Not you? Switch name'.
+              </p>
             </div>
 
-            <div className="pt-2">
+            <div className="flex flex-col gap-2 pt-2 items-center">
               <Button
                 variant="primary"
                 fullWidth
@@ -311,6 +449,12 @@ export const JoinPage: React.FC = () => {
               >
                 Check again
               </Button>
+              <SwitchNameAction
+                displayName={identity.displayName}
+                memberToken={identity.memberToken}
+                joinCode={joinCode!}
+                onReleased={handleSwitchNameReleased}
+              />
             </div>
 
             <p className="text-xs text-neutral-400">
@@ -324,6 +468,8 @@ export const JoinPage: React.FC = () => {
           <Card>
             <NameClaimList
               members={groupInfo.members}
+              selectedId={selectedMemberId}
+              onSelectId={setSelectedMemberId}
               onClaim={handleClaim}
               isClaiming={isClaiming}
               error={claimError}

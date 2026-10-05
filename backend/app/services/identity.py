@@ -381,3 +381,15 @@ def require_approved(member: Member) -> None:
         raise ClaimNotApprovedError(
             f"Member '{member.display_name}' claim is not approved (status: {member.claim_status})."
         )
+
+
+def release_own_claim(
+    session: Session,
+    member: Member,
+) -> Member:
+    """Release a member's own claim, returning claim_status to unclaimed and clearing token hash.
+
+    Reuses reset_claim logic so votes and history are untouched.
+    """
+    return reset_claim(session, member.group_id, member.id)
+

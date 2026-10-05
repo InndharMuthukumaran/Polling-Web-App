@@ -33,6 +33,7 @@ from app.services.identity import (
     create_group_with_admin,
     get_group_by_join_code,
     list_group_members,
+    release_own_claim,
     require_approved,
     reset_claim,
     update_group_settings,
@@ -520,3 +521,25 @@ def test_alembic_migration_upgrade_and_downgrade_cycle(test_engine_and_url):
     with engine.begin() as connection:
         alembic_cfg.attributes["connection"] = connection
         command.upgrade(alembic_cfg, "head")
+
+
+def test_release_own_claim(db_session):
+    """release_own_claim frees the name, clears token hash and claimed_at."""
+    group, _ = create_group_with_admin(db_session, "Self Release Group")
+    members = add_members_bulk(db_session, group.id, ["Daniel"])
+    dave = members[0]
+
+    claimed, token = claim_member(db_session, group.join_code, dave.id)
+    assert claimed.claim_status == "approved"
+    assert claimed.member_token_hash is not None
+    assert claimed.claimed_at is not None
+
+    released = release_own_claim(db_session, claimed)
+    assert released.claim_status == "unclaimed"
+    assert released.member_token_hash is None
+    assert released.claimed_at is None
+
+    # Old token fails authentication
+    with pytest.raises(InvalidTokenError):
+        authenticate_member(db_session, token)
+
