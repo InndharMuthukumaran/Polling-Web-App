@@ -10,6 +10,7 @@ from app.api.schemas import (
     GroupCreate,
     GroupCreatedResponse,
     GroupDetailResponse,
+    GroupFieldResponse,
     GroupSettingsUpdate,
     GroupSummaryResponse,
     MemberSummary,
@@ -19,7 +20,9 @@ from app.api.schemas import (
     PollDetailResponse,
     PollSummaryResponse,
 )
+from app.errors import PollValidationError
 from app.models import Group, Poll
+from app.services.fields import list_group_fields
 from app.services.identity import (
     add_members_bulk,
     approve_claim,
@@ -54,13 +57,15 @@ def get_group(
     group: Group = Depends(require_admin_for_group),
     session: Session = Depends(get_db),
 ) -> GroupDetailResponse:
-    """Get group details and members (admin only)."""
+    """Get group details, fields, and members (admin only)."""
     members = list_group_members(session, group.id)
+    fields = list_group_fields(session, group.id)
     return GroupDetailResponse(
         id=group.id,
         name=group.name,
         join_code=group.join_code,
         require_claim_approval=group.require_claim_approval,
+        fields=[GroupFieldResponse.model_validate(f) for f in fields],
         members=[MemberSummary.model_validate(m) for m in members],
     )
 
@@ -87,7 +92,20 @@ def add_members(
     session: Session = Depends(get_db),
 ) -> list[MemberSummary]:
     """Bulk-add members to the group (all-or-nothing, admin only)."""
-    members = add_members_bulk(session, group.id, payload.display_names)
+    has_names = payload.display_names is not None
+    has_members = payload.members is not None
+    if (has_names and has_members) or (not has_names and not has_members):
+        raise PollValidationError("Exactly one of 'display_names' or 'members' must be provided.")
+
+    if has_names:
+        members = add_members_bulk(session, group.id, display_names=payload.display_names)
+    else:
+        raw_members = [
+            {"display_name": m.display_name, "values": m.values or {}}
+            for m in payload.members  # type: ignore[union-attr]
+        ]
+        members = add_members_bulk(session, group.id, members_data=raw_members)
+
     return [MemberSummary.model_validate(m) for m in members]
 
 
@@ -98,13 +116,14 @@ def patch_member(
     group: Group = Depends(require_admin_for_group),
     session: Session = Depends(get_db),
 ) -> MemberSummary:
-    """Update member display name or active status (admin only)."""
+    """Update member display name, active status, or values (admin only)."""
     member = update_member(
         session,
         group_id=group.id,
         member_id=member_id,
         display_name=payload.display_name,
         is_active=payload.is_active,
+        values=payload.values,
     )
     return MemberSummary.model_validate(member)
 

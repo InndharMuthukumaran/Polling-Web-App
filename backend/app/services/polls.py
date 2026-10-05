@@ -21,8 +21,9 @@ from app.errors import (
     PollNotFoundError,
     PollValidationError,
 )
-from app.models import Group, Member, Poll, PollOption, Vote, VoteHistory
+from app.models import Group, GroupField, Member, Poll, PollOption, Vote, VoteHistory
 from app.security import generate_join_code
+from app.services.fields import validate_member_values_for_create
 
 VALID_ROLES = frozenset({"target", "in_progress", "excused", "not_yet"})
 VALID_COMPLETION_MODES = frozenset({"first", "last"})
@@ -118,27 +119,81 @@ def add_member(
     display_name: str,
     is_active: bool = True,
     now: datetime | None = None,
+    values: dict[str, Any] | None = None,
 ) -> Member:
     """Add a new member to a group."""
     gid = resolve_uuid(group_id)
-    if not display_name or not display_name.strip():
-        raise PollValidationError("Member display_name cannot be empty.")
 
-    group = session.get(Group, gid)
+    # Concurrency lock
+    group = session.scalar(
+        select(Group).where(Group.id == gid).with_for_update()
+    )
     if not group:
         raise GroupNotFoundError(f"Group {gid} not found.")
+
+    if not display_name or not display_name.strip():
+        raise PollValidationError("Member display_name cannot be empty.")
+    clean_name = display_name.strip()
+
+    fields = list(
+        session.scalars(
+            select(GroupField)
+            .where(GroupField.group_id == gid)
+            .order_by(GroupField.position)
+        ).all()
+    )
+    id_field = next((f for f in fields if f.is_identifier), None)
+
+    cleaned_vals, identifier_val = validate_member_values_for_create(fields, values)
+
+    if id_field is not None:
+        if identifier_val is not None:
+            existing = session.scalar(
+                select(Member).where(
+                    Member.group_id == gid,
+                    Member.identifier_value == identifier_val,
+                )
+            )
+            if existing:
+                raise PollValidationError(
+                    f"Member with identifier '{identifier_val}' already exists."
+                )
+    else:
+        existing = session.scalar(
+            select(Member).where(
+                Member.group_id == gid,
+                Member.display_name == clean_name,
+            )
+        )
+        if existing:
+            raise PollValidationError(
+                f"Member with name '{clean_name}' already exists in group."
+            )
 
     current_time = ensure_utc(now) or datetime.now(timezone.utc)
     member = Member(
         id=uuid.uuid4(),
         group_id=gid,
-        display_name=display_name.strip(),
+        display_name=clean_name,
         is_active=is_active,
+        field_values=cleaned_vals,
+        identifier_value=identifier_val,
         created_at=current_time,
     )
+    if id_field is not None:
+        raw_id = cleaned_vals.get(id_field.key)
+        member.identifier = str(raw_id) if raw_id is not None else None
+    else:
+        member.identifier = None
+
     session.add(member)
     session.commit()
     session.refresh(member)
+    if id_field is not None:
+        raw_id = (member.field_values or {}).get(id_field.key)
+        member.identifier = str(raw_id) if raw_id is not None else None
+    else:
+        member.identifier = None
     return member
 
 

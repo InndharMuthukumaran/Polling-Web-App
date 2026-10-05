@@ -310,6 +310,101 @@ This section documents assumptions and architectural decisions made for Part 3C 
   - Recognized view includes helper text: `"This browser is signed in as {name}. To let someone else use this device, tap 'Not you? Switch name'."`
 
 
+# Assumptions and Design Decisions (Part R1a: Group Custom Fields and Identifier)
+
+This section documents assumptions and architectural decisions made for Part R1a (Custom group fields, values, defaults, identifier, and admin API).
+
+## 1. Database Schema & Migration (003_group_fields)
+- **Table `group_fields`**:
+  - `id`: UUID primary key.
+  - `group_id`: UUID foreign key to `groups.id` with `ON DELETE CASCADE`.
+  - `key`: String(80), immutable generated key.
+  - `name`: String(60), trimmed display name.
+  - `field_type`: String(20), constrained by check constraint `field_type IN ('text', 'number', 'choice', 'link')`.
+  - `is_required`: Boolean, default `False`.
+  - `default_value`: Text, nullable.
+  - `choices`: JSONB list of strings, nullable.
+  - `is_identifier`: Boolean, default `False`.
+  - `position`: Integer, 1-based creation order.
+  - `created_at`: UTC timestamp with timezone.
+  - **Constraints**:
+    - Unique constraint on `(group_id, key)`.
+    - Partial unique index on `(group_id, lower(name))`.
+    - Partial unique index on `group_id` where `is_identifier IS TRUE` (enforcing at most one identifier per group).
+- **Table `members`**:
+  - `field_values`: JSONB, not null, server default `'{}'`.
+  - `identifier_value`: String(500), nullable, stores the normalized identifier.
+  - **Constraint Changes**:
+    - Dropped unique constraint `uq_members_group_display_name`.
+    - Added partial unique index `ix_members_group_identifier` on `(group_id, identifier_value)` where `identifier_value IS NOT NULL`.
+- **Downgrade Compatibility**:
+  - Downgrade cleanly reverses all schema changes: drops `group_fields` table, drops partial unique index on `(group_id, identifier_value)`, drops columns `identifier_value` and `field_values`, and re-creates `uq_members_group_display_name`.
+  - **Note on Downgrade**: If multiple members in a group were created with identical display names under Part R1a (allowed when an identifier field exists), re-adding the unique constraint on `(group_id, display_name)` during downgrade will fail until duplicate names are manually resolved.
+
+## 2. Field Definitions & Keys
+- **Name**: 1 to 60 characters trimmed, case-insensitive unique within the group.
+- **Key Generation**:
+  - Generated at field creation by lowercasing the name, converting runs of non-alphanumeric characters to `_`, and trimming `_`.
+  - Collision handling: if a key already exists in the group (e.g. "Register No" vs "Register  No"), numerical suffixes `_2`, `_3`, etc. are appended.
+  - Keys are immutable and never change upon renaming the field.
+- **Field Type**: Immutable after creation. Supported types: `text`, `number`, `choice`, `link`.
+- **Choices**:
+  - Required and permitted only for `choice` fields: 2 to 50 unique items (ignoring case), each 1 to 100 characters trimmed.
+  - Non-choice types must not have `choices`.
+- **Field Limit**: Enforced maximum of 30 fields per group.
+- **Default Value**:
+  - Validated according to the field type. For `choice` fields, must match one of the defined choices.
+  - Identifier fields cannot have a default value.
+
+## 3. Values & Validation
+- Stored as a JSON object in `members.field_values` mapping `{key: value}`.
+- In SQLAlchemy, mutations always assign a newly constructed dictionary (`member.field_values = {**old, ...}`) to guarantee SQLAlchemy ORM change detection on JSONB columns.
+- **Blank Definition**: A value is blank if it is missing, `None`, or consists entirely of whitespace.
+- **Type Validation Rules**:
+  - `text`: string, trimmed, maximum 500 characters.
+  - `link`: string, trimmed, maximum 2000 characters, no whitespace, must start with `http://` or `https://`.
+  - `choice`: case-insensitive match against field choices, stored as the canonical choice string.
+  - `number`: finite number (NaN, Infinity, and booleans rejected); accepted as JSON number or numeric string; stored as JSON number (integer when whole).
+- **Defaults & Updates**:
+  - On member creation or update, any blank value for a field with a default is filled with that default.
+  - A blank value for a required field without a default raises `PollValidationError`.
+  - Unknown keys in `values` raise `PollValidationError`.
+  - Partial updates: only provided keys are altered; sending a blank resets the key to the default (or deletes the key if no default exists, provided the field is not required).
+
+## 4. Identifier Field Rules
+- Only a `text` field can be marked as the identifier.
+- An identifier field is always required (`is_required=True`) and cannot have a default.
+- **Normalization**: Trim, collapse inner whitespace sequences to a single space, and `casefold()`. Stored in `members.identifier_value`; original text is stored in `members.field_values`.
+- **Display Name Uniqueness**: Display names are unique within a group only while the group has NO identifier field. Once an identifier field exists, duplicate display names are allowed.
+- **Existing Members Lifecycle**:
+  - A new field cannot be created as the identifier while members exist. The creator adds a regular text field, populates values, and then updates it to be the identifier.
+  - Marking as identifier validates that every member has a non-blank value and that normalized values are unique; failures return row-level details identifying offending members. On success, `identifier_value` is set for all members and the field becomes required.
+  - Unmarking the identifier clears `identifier_value` for all members; the field remains required.
+  - Deleting an identifier field is rejected (must be unmarked first).
+  - Replacing choices fails if any member currently holds a value not present in the new list.
+  - Modifying `default_value` never alters existing member rows.
+
+## 5. Concurrency & Error Responses
+- **Concurrency Locking**:
+  - Every service function that writes fields or members first locks the group row using `select(Group).where(...).with_for_update()`.
+  - Prevents race conditions during uniqueness and existence validations. Database unique indexes act as the final safety net, translating any concurrent index conflict into an HTTP 409 `conflict`.
+  - Validated with multi-threaded test `test_concurrent_members_same_identifier`.
+- **Row-Level Error Details**:
+  - `PollValidationError` and API error responses support an optional `details` list:
+    `{"error": {"code": "validation_error", "message": "...", "details": [{"row": 3, "field": "Register No", "message": "..."}]}}`
+  - Rows are 1-based within the request batch. Errors without details retain the exact existing envelope.
+
+## 6. Admin API Endpoints
+- All field management endpoints require `X-Admin-Token` authentication for the specific group.
+- `GET /api/v1/groups/{group_id}/fields`: List fields ordered by position.
+- `POST /api/v1/groups/{group_id}/fields`: Create custom field (`name`, `field_type`, `is_required`, `default_value`, `choices`).
+- `PATCH /api/v1/groups/{group_id}/fields/{field_id}`: Partial field update.
+- `DELETE /api/v1/groups/{group_id}/fields/{field_id}`: Delete custom field (returns 204, removes key from member values).
+- `POST /api/v1/groups/{group_id}/members`: Accepts either `{display_names: [...]}` or `{members: [{display_name, values?}]}` (up to 2000 rows, all-or-nothing with row-level details).
+- `PATCH /api/v1/groups/{group_id}/members/{member_id}`: Accepts optional `values` dictionary for partial update.
+- `GET /api/v1/groups/{group_id}`: Adds `fields` list, and adds member `values` object and `identifier` (original text or null).
+
+
 
 
 

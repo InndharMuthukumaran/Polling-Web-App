@@ -4,7 +4,7 @@ from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.errors import register_error_handlers
-from app.api.routes import groups, health, join, me, polls
+from app.api.routes import fields, groups, health, join, me, polls
 from app.config import settings
 
 app = FastAPI(
@@ -33,6 +33,7 @@ app.include_router(health.router)
 # API v1 Router
 api_v1 = APIRouter(prefix="/api/v1")
 api_v1.include_router(groups.router)
+api_v1.include_router(fields.router)
 api_v1.include_router(join.router)
 api_v1.include_router(me.router)
 api_v1.include_router(polls.router)

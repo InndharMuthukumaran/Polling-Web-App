@@ -1,7 +1,7 @@
 """Pydantic v2 request and response models for the Polling API."""
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -23,6 +23,39 @@ class ErrorResponse(BaseModel):
 # ---------------------------------------------------------------------------
 class HealthResponse(BaseModel):
     status: str = "ok"
+
+
+# ---------------------------------------------------------------------------
+# Group Field Schemas
+# ---------------------------------------------------------------------------
+class GroupFieldResponse(BaseModel):
+    id: UUID
+    key: str
+    name: str
+    field_type: str
+    is_required: bool
+    default_value: str | None = None
+    choices: list[str] | None = None
+    is_identifier: bool
+    position: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class FieldCreate(BaseModel):
+    name: str
+    field_type: str
+    is_required: bool = False
+    default_value: str | None = None
+    choices: list[str] | None = None
+
+
+class FieldUpdate(BaseModel):
+    name: str | None = None
+    is_required: bool | None = None
+    default_value: str | None = None
+    choices: list[str] | None = None
+    is_identifier: bool | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -48,6 +81,8 @@ class MemberSummary(BaseModel):
     display_name: str
     is_active: bool
     claim_status: str
+    values: dict[str, Any] = Field(default_factory=dict)
+    identifier: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -57,6 +92,7 @@ class GroupDetailResponse(BaseModel):
     name: str
     join_code: str
     require_claim_approval: bool
+    fields: list[GroupFieldResponse] = Field(default_factory=list)
     members: list[MemberSummary]
 
     model_config = ConfigDict(from_attributes=True)
@@ -74,13 +110,20 @@ class GroupSummaryResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Member Management Schemas
 # ---------------------------------------------------------------------------
+class MemberCreateItem(BaseModel):
+    display_name: str
+    values: dict[str, Any] | None = None
+
+
 class MembersBulkCreate(BaseModel):
-    display_names: list[str]
+    display_names: list[str] | None = None
+    members: list[MemberCreateItem] | None = None
 
 
 class MemberUpdate(BaseModel):
     display_name: str | None = None
     is_active: bool | None = None
+    values: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------

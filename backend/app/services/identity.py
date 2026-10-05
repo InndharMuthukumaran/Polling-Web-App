@@ -17,12 +17,17 @@ from app.errors import (
     PermissionDeniedError,
     PollValidationError,
 )
-from app.models import Group, Member
+from app.models import Group, GroupField, Member
 from app.security import (
     generate_join_code,
     generate_token,
     hash_token,
     verify_token_hash,
+)
+from app.services.fields import (
+    normalize_identifier,
+    validate_member_values_for_create,
+    validate_member_values_for_update,
 )
 
 
@@ -119,55 +124,168 @@ def update_group_settings(
 def add_members_bulk(
     session: Session,
     group_id: uuid.UUID | str,
-    display_names: list[str],
+    display_names: list[str] | list[dict[str, Any]] | None = None,
+    members_data: list[dict[str, Any]] | None = None,
 ) -> list[Member]:
-    """Bulk-add members to a group. All-or-nothing validation."""
+    """Bulk-add members to a group. All-or-nothing validation with row-level details."""
     gid = resolve_uuid(group_id)
-    group = session.get(Group, gid)
+
+    # Concurrency lock on group row
+    group = session.scalar(
+        select(Group).where(Group.id == gid).with_for_update()
+    )
     if not group:
         raise GroupNotFoundError(f"Group {gid} not found.")
 
-    trimmed_names: list[str] = []
-    seen_in_batch: set[str] = set()
+    raw_items: list[dict[str, Any]] = []
+    if members_data is not None:
+        raw_items = members_data
+    elif display_names is not None:
+        for item in display_names:
+            if isinstance(item, str):
+                raw_items.append({"display_name": item, "values": {}})
+            elif isinstance(item, dict):
+                raw_items.append(item)
+            else:
+                raw_items.append({"display_name": item, "values": {}})
 
-    for name in display_names:
-        if not isinstance(name, str) or not name.strip():
-            raise PollValidationError("Member display_name cannot be blank.")
-        t = name.strip()
-        if t in seen_in_batch:
-            raise PollValidationError(f"Duplicate display_name in batch: '{t}'.")
-        seen_in_batch.add(t)
-        trimmed_names.append(t)
+    if len(raw_items) > 2000:
+        raise PollValidationError("Cannot add more than 2000 members in a single request.")
+    if len(raw_items) == 0:
+        raise PollValidationError("Members list cannot be empty.")
 
-    # Check against existing members in the group
-    existing_members = session.scalars(
-        select(Member.display_name).where(Member.group_id == gid)
-    ).all()
-    existing_names_set = set(existing_members)
+    fields = list(
+        session.scalars(
+            select(GroupField)
+            .where(GroupField.group_id == gid)
+            .order_by(GroupField.position)
+        ).all()
+    )
+    id_field = next((f for f in fields if f.is_identifier), None)
 
-    for t in trimmed_names:
-        if t in existing_names_set:
-            raise PollValidationError(f"Member with name '{t}' already exists in group.")
+    # Query existing members for uniqueness checks
+    existing_members = list(
+        session.scalars(select(Member).where(Member.group_id == gid)).all()
+    )
+    existing_display_names: set[str] = {m.display_name for m in existing_members}
+    existing_identifiers: set[str] = {
+        m.identifier_value for m in existing_members if m.identifier_value is not None
+    }
+
+    details: list[dict[str, Any]] = []
+    seen_display_names: dict[str, int] = {}
+    seen_identifiers: dict[str, int] = {}
+    validated_rows: list[tuple[str, dict[str, Any], str | None]] = []
+
+    for idx, item in enumerate(raw_items):
+        row = idx + 1
+        name_val = item.get("display_name")
+        if not isinstance(name_val, str) or not name_val.strip():
+            details.append({
+                "row": row,
+                "field": "display_name",
+                "message": "Member display_name cannot be blank.",
+            })
+            clean_name = ""
+        else:
+            clean_name = name_val.strip()
+
+        # Check values
+        raw_vals = item.get("values")
+        cleaned_vals: dict[str, Any] = {}
+        identifier_val: str | None = None
+        try:
+            cleaned_vals, identifier_val = validate_member_values_for_create(
+                fields, raw_vals, row=row
+            )
+        except PollValidationError as exc:
+            if exc.details:
+                details.extend(exc.details)
+            else:
+                details.append({
+                    "row": row,
+                    "field": "values",
+                    "message": exc.message,
+                })
+
+        # Uniqueness checks
+        if id_field is not None:
+            # Group has an identifier field: duplicate display names allowed, identifier must be unique
+            if identifier_val is not None:
+                if identifier_val in seen_identifiers:
+                    details.append({
+                        "row": row,
+                        "field": id_field.name,
+                        "message": "Duplicate identifier value in batch.",
+                    })
+                else:
+                    seen_identifiers[identifier_val] = row
+
+                if identifier_val in existing_identifiers:
+                    details.append({
+                        "row": row,
+                        "field": id_field.name,
+                        "message": "Member with identifier already exists in group.",
+                    })
+        else:
+            # Group has NO identifier field: display_name must be unique
+            if clean_name:
+                if clean_name in seen_display_names:
+                    details.append({
+                        "row": row,
+                        "field": "display_name",
+                        "message": f"Duplicate display_name in batch: '{clean_name}'.",
+                    })
+                else:
+                    seen_display_names[clean_name] = row
+
+                if clean_name in existing_display_names:
+                    details.append({
+                        "row": row,
+                        "field": "display_name",
+                        "message": f"Member with name '{clean_name}' already exists in group.",
+                    })
+
+        validated_rows.append((clean_name, cleaned_vals, identifier_val))
+
+    if details:
+        primary_msg = details[0]["message"] if len(details) == 1 else "Validation failed for one or more members."
+        raise PollValidationError(
+            primary_msg,
+            details=details,
+        )
 
     current_time = datetime.now(timezone.utc)
     new_members: list[Member] = []
-    for t in trimmed_names:
+    for clean_name, cleaned_vals, identifier_val in validated_rows:
         m = Member(
             id=uuid.uuid4(),
             group_id=gid,
-            display_name=t,
+            display_name=clean_name,
             is_active=True,
             claim_status="unclaimed",
             member_token_hash=None,
             claimed_at=None,
+            field_values=cleaned_vals,
+            identifier_value=identifier_val,
             created_at=current_time,
         )
+        if id_field is not None:
+            raw_id = cleaned_vals.get(id_field.key)
+            m.identifier = str(raw_id) if raw_id is not None else None
+        else:
+            m.identifier = None
         session.add(m)
         new_members.append(m)
 
     session.commit()
     for m in new_members:
         session.refresh(m)
+        if id_field is not None:
+            raw_id = (m.field_values or {}).get(id_field.key)
+            m.identifier = str(raw_id) if raw_id is not None else None
+        else:
+            m.identifier = None
     return new_members
 
 
@@ -177,10 +295,18 @@ def update_member(
     member_id: uuid.UUID | str,
     display_name: str | None = None,
     is_active: bool | None = None,
+    values: dict[str, Any] | None = None,
 ) -> Member:
-    """Update member display name or active status."""
+    """Update member display name, active status, or custom field values."""
     gid = resolve_uuid(group_id)
     mid = resolve_uuid(member_id)
+
+    # Concurrency lock
+    group = session.scalar(
+        select(Group).where(Group.id == gid).with_for_update()
+    )
+    if not group:
+        raise GroupNotFoundError(f"Group {gid} not found.")
 
     member = session.get(Member, mid)
     if not member:
@@ -189,28 +315,65 @@ def update_member(
     if member.group_id != gid:
         raise PermissionDeniedError(f"Member {mid} does not belong to group {gid}.")
 
+    fields = list(
+        session.scalars(
+            select(GroupField)
+            .where(GroupField.group_id == gid)
+            .order_by(GroupField.position)
+        ).all()
+    )
+    id_field = next((f for f in fields if f.is_identifier), None)
+
     if display_name is not None:
         if not isinstance(display_name, str) or not display_name.strip():
             raise PollValidationError("display_name cannot be blank.")
         trimmed = display_name.strip()
         if trimmed != member.display_name:
-            # Check uniqueness within the group
-            existing = session.scalar(
-                select(Member).where(
-                    Member.group_id == gid,
-                    Member.display_name == trimmed,
-                    Member.id != mid,
+            if id_field is None:
+                # Uniqueness required only when no identifier field exists
+                existing = session.scalar(
+                    select(Member).where(
+                        Member.group_id == gid,
+                        Member.display_name == trimmed,
+                        Member.id != mid,
+                    )
                 )
-            )
-            if existing:
-                raise PollValidationError(f"Display name '{trimmed}' already in use.")
+                if existing:
+                    raise PollValidationError(f"Display name '{trimmed}' already in use.")
             member.display_name = trimmed
 
     if is_active is not None:
         member.is_active = bool(is_active)
 
+    if values is not None:
+        updated_values, new_id_val = validate_member_values_for_update(
+            fields, member.field_values or {}, values
+        )
+        if id_field is not None and new_id_val is not None:
+            # Check identifier uniqueness among other members
+            existing = session.scalar(
+                select(Member).where(
+                    Member.group_id == gid,
+                    Member.identifier_value == new_id_val,
+                    Member.id != mid,
+                )
+            )
+            if existing:
+                raise PollValidationError(
+                    f"Identifier value '{new_id_val}' already in use in group."
+                )
+            member.identifier_value = new_id_val
+
+        # Assign a NEW dict so SQLAlchemy sees the mutation
+        member.field_values = {**updated_values}
+
     session.commit()
     session.refresh(member)
+    if id_field is not None:
+        raw_id = (member.field_values or {}).get(id_field.key)
+        member.identifier = str(raw_id) if raw_id is not None else None
+    else:
+        member.identifier = None
     return member
 
 
@@ -224,13 +387,27 @@ def list_group_members(
     if not group:
         raise GroupNotFoundError(f"Group {gid} not found.")
 
-    return list(
+    fields = list(
+        session.scalars(
+            select(GroupField).where(GroupField.group_id == gid)
+        ).all()
+    )
+    id_field = next((f for f in fields if f.is_identifier), None)
+
+    members = list(
         session.scalars(
             select(Member)
             .where(Member.group_id == gid)
             .order_by(Member.display_name)
         ).all()
     )
+    for m in members:
+        if id_field and m.field_values:
+            raw_id = m.field_values.get(id_field.key)
+            m.identifier = str(raw_id) if raw_id is not None else None
+        else:
+            m.identifier = None
+    return members
 
 
 def get_group_by_join_code(

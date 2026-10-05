@@ -8,13 +8,16 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     TypeDecorator,
     UniqueConstraint,
     Uuid,
+    text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -68,6 +71,12 @@ class Group(Base):
         UTCDateTime, default=utc_now, nullable=False
     )
 
+    fields: Mapped[list["GroupField"]] = relationship(
+        "GroupField",
+        back_populates="group",
+        cascade="all, delete-orphan",
+        order_by="GroupField.position",
+    )
     members: Mapped[list["Member"]] = relationship(
         "Member", back_populates="group", cascade="all, delete-orphan"
     )
@@ -76,17 +85,65 @@ class Group(Base):
     )
 
 
+class GroupField(Base):
+    """A custom field defined for members within a group."""
+
+    __tablename__ = "group_fields"
+    __table_args__ = (
+        UniqueConstraint("group_id", "key", name="uq_group_fields_group_key"),
+        CheckConstraint(
+            "field_type IN ('text', 'number', 'choice', 'link')",
+            name="ck_group_fields_field_type",
+        ),
+        Index("ix_group_fields_group_lower_name", "group_id", text("lower(name)"), unique=True),
+        Index(
+            "uq_group_fields_one_identifier",
+            "group_id",
+            unique=True,
+            postgresql_where=text("is_identifier IS TRUE"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, default=uuid.uuid4
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("groups.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    key: Mapped[str] = mapped_column(String(80), nullable=False)
+    name: Mapped[str] = mapped_column(String(60), nullable=False)
+    field_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    is_required: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    default_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    choices: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    is_identifier: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime, default=utc_now, nullable=False
+    )
+
+    group: Mapped["Group"] = relationship("Group", back_populates="fields")
+
+
 class Member(Base):
     """A group member who can participate in polls."""
 
     __tablename__ = "members"
     __table_args__ = (
-        UniqueConstraint(
-            "group_id", "display_name", name="uq_members_group_display_name"
-        ),
         CheckConstraint(
             "claim_status IN ('unclaimed', 'pending', 'approved')",
             name="ck_members_claim_status",
+        ),
+        Index(
+            "ix_members_group_identifier",
+            "group_id",
+            "identifier_value",
+            unique=True,
+            postgresql_where=text("identifier_value IS NOT NULL"),
         ),
     )
 
@@ -109,6 +166,12 @@ class Member(Base):
     claimed_at: Mapped[datetime | None] = mapped_column(
         UTCDateTime, nullable=True
     )
+    field_values: Mapped[dict] = mapped_column(
+        JSONB, default=dict, server_default="{}", nullable=False
+    )
+    identifier_value: Mapped[str | None] = mapped_column(
+        String(500), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         UTCDateTime, default=utc_now, nullable=False
     )
@@ -120,6 +183,27 @@ class Member(Base):
     vote_history: Mapped[list["VoteHistory"]] = relationship(
         "VoteHistory", back_populates="member", cascade="all, delete-orphan"
     )
+
+    @property
+    def values(self) -> dict:
+        return self.field_values if self.field_values is not None else {}
+
+    @property
+    def identifier(self) -> str | None:
+        if getattr(self, "_identifier_override", None) is not None:
+            return self._identifier_override
+        if self.identifier_value is None:
+            return None
+        if self.group and hasattr(self.group, "fields"):
+            for f in self.group.fields:
+                if f.is_identifier:
+                    val = (self.field_values or {}).get(f.key)
+                    return str(val) if val is not None else None
+        return None
+
+    @identifier.setter
+    def identifier(self, val: str | None) -> None:
+        self._identifier_override = val
 
 
 class Poll(Base):

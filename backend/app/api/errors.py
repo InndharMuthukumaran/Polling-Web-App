@@ -9,6 +9,7 @@ from app.errors import (
     ClaimConflictError,
     ClaimNotApprovedError,
     ClaimStateError,
+    FieldNotFoundError,
     GroupNotFoundError,
     InvalidTokenError,
     MemberGroupMismatchError,
@@ -32,11 +33,19 @@ class MissingTokenError(Exception):
         self.message = message
 
 
-def create_error_response(status_code: int, code: str, message: str) -> JSONResponse:
+def create_error_response(
+    status_code: int,
+    code: str,
+    message: str,
+    details: list[dict] | None = None,
+) -> JSONResponse:
     """Format and return a standardized JSON error response."""
+    error_content: dict = {"code": code, "message": message}
+    if details is not None:
+        error_content["details"] = details
     return JSONResponse(
         status_code=status_code,
-        content={"error": {"code": code, "message": message}},
+        content={"error": error_content},
     )
 
 
@@ -75,6 +84,10 @@ def register_error_handlers(app: FastAPI) -> None:
     async def member_not_found_handler(request: Request, exc: MemberNotFoundError):
         return create_error_response(404, "not_found", str(exc))
 
+    @app.exception_handler(FieldNotFoundError)
+    async def field_not_found_handler(request: Request, exc: FieldNotFoundError):
+        return create_error_response(404, "not_found", str(exc))
+
     @app.exception_handler(PollNotFoundError)
     async def poll_not_found_handler(request: Request, exc: PollNotFoundError):
         return create_error_response(404, "not_found", str(exc))
@@ -97,7 +110,7 @@ def register_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(PollValidationError)
     async def poll_validation_handler(request: Request, exc: PollValidationError):
-        return create_error_response(422, "validation_error", str(exc))
+        return create_error_response(422, "validation_error", str(exc), getattr(exc, "details", None))
 
     @app.exception_handler(OptionPollMismatchError)
     async def option_poll_mismatch_handler(request: Request, exc: OptionPollMismatchError):

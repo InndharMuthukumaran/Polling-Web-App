@@ -55,10 +55,19 @@ class OptionPollMismatchError(PollingAppError):
     pass
 
 
-class PollValidationError(PollingAppError):
-    """Raised when poll creation input fails validation constraints."""
+class FieldNotFoundError(PollingAppError):
+    """Raised when a requested group field does not exist."""
 
     pass
+
+
+class PollValidationError(PollingAppError):
+    """Raised when poll, field, or member creation input fails validation constraints."""
+
+    def __init__(self, message: str, details: list[dict] | None = None):
+        super().__init__(message)
+        self.message = message
+        self.details = details
 
 
 class InvalidTokenError(PollingAppError):
