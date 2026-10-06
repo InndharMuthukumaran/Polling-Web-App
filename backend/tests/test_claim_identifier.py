@@ -9,6 +9,7 @@ from alembic.config import Config
 import sqlalchemy as sa
 from sqlalchemy.orm import sessionmaker
 
+from app.config import settings
 from app.models import Group
 from app.ratelimit import lookup_limiter
 
@@ -333,15 +334,16 @@ def test_lookup_rate_limiting_with_injectable_clock(client):
     lookup_limiter.set_clock(lambda: simulated_time)
 
     try:
-        # First 10 lookups for jc1 pass (returning 404 because no member matches, but not 429)
-        for i in range(10):
+        # First lookups for jc1 pass (returning 404 because no member matches, but not 429)
+        limit = settings.lookup_limit_per_ip
+        for i in range(limit):
             res = client.post(f"/api/v1/join/{jc1}/lookup", json={"identifier": f"test_{i}"})
             assert res.status_code == 404, f"Attempt {i+1} failed with status {res.status_code}"
 
-        # 11th lookup for jc1 within the same minute returns 429
-        res_11 = client.post(f"/api/v1/join/{jc1}/lookup", json={"identifier": "test_11"})
-        assert res_11.status_code == 429
-        err_content = res_11.json()["error"]
+        # Exceeded lookup for jc1 within the same minute returns 429
+        res_exceeded = client.post(f"/api/v1/join/{jc1}/lookup", json={"identifier": "test_exceeded"})
+        assert res_exceeded.status_code == 429
+        err_content = res_exceeded.json()["error"]
         assert err_content["code"] == "rate_limited"
         assert err_content["message"] == "Too many attempts. Please wait a minute and try again."
 

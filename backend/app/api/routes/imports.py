@@ -14,6 +14,7 @@ from app.services.importer import (
     execute_spreadsheet_import,
     generate_template_file,
     preview_import_data,
+    read_upload_capped,
 )
 
 router = APIRouter(prefix="/groups", tags=["Imports"])
@@ -48,7 +49,7 @@ def preview_members_import(
     session: Session = Depends(get_db),
 ) -> ImportPreviewResponse:
     """Upload a spreadsheet to preview headers, total rows, sample rows, and suggested mapping."""
-    content = file.file.read()
+    content = read_upload_capped(file)
     filename = file.filename or "uploaded.xlsx"
     fields = list_group_fields(session, group.id)
 
@@ -89,7 +90,7 @@ def import_group_members(
         except Exception:
             raise PollValidationError("Field 'new_fields' must be a valid JSON list.")
 
-    content = file.file.read()
+    content = read_upload_capped(file)
     filename = file.filename or "uploaded.xlsx"
 
     result = execute_spreadsheet_import(

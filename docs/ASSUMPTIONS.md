@@ -518,6 +518,53 @@ This section documents assumptions and architectural decisions made for Part R2 
 - All endpoints protected by `require_admin_for_group` requiring valid `X-Admin-Token`.
 
 
+# Assumptions and Design Decisions (Part R2c: Rate Limiting Hardening & Upload Memory Safety)
+
+This section documents assumptions and architectural decisions made for Part R2c (Fixing lookup rate-limit spoofing, memory growth, and unconstrained upload reads).
+
+## 1. Lookup Rate Limiting Hardening (Fix 1)
+
+### TRUSTED_PROXY_COUNT & Client IP Resolution (`app/ratelimit.py`)
+- **Vulnerability Addressed**: Previously, client IP was extracted from the first entry of `X-Forwarded-For`. Callers could bypass rate limiting by sending a different spoofed `X-Forwarded-For` header on each request.
+- **Settings**:
+  - `TRUSTED_PROXY_COUNT` (int, default `0`).
+  - `LOOKUP_LIMIT_PER_IP` (int, default `30` per 60 seconds).
+  - `LOOKUP_LIMIT_PER_CODE` (int, default `300` per 60 seconds).
+- **Deployment Requirement for `TRUSTED_PROXY_COUNT`**:
+  - `TRUSTED_PROXY_COUNT` must be configured correctly at deployment to match the exact number of trusted reverse proxies or load balancers in front of the application (e.g. `1` for a single reverse proxy like Nginx or Render/Cloudflare, `2` for Cloudflare + internal load balancer).
+  - With the default `0`, `X-Forwarded-For` is completely ignored and `request.client.host` is used. **If left at `0` behind a hosting reverse proxy, all users would appear to share the single internal proxy IP address and would share the per-IP rate limit.**
+  - When `TRUSTED_PROXY_COUNT` is $N > 0$, `get_client_ip` extracts the entry that is **$N$ positions from the right** of `X-Forwarded-For` (i.e. `entries[-N]`), which is the client IP appended by your own $N$-th proxy and cannot be forged by client requests.
+  - If `X-Forwarded-For` is missing, empty, or contains fewer than $N$ entries, `get_client_ip` safely falls back to `request.client.host`.
+
+### Dual Limits on Member Identifier Lookup
+- `POST /join/{join_code}/lookup` enforces two sequential checks:
+  1. Per `IP + join code`: limited to `LOOKUP_LIMIT_PER_IP` (default 30) attempts per 60s window.
+  2. Per `join code` across all clients: limited to `LOOKUP_LIMIT_PER_CODE` (default 300) attempts per 60s window.
+- The per-code limit prevents distributed or proxy-rotated guessing attacks against a group's roster while permitting an entire classroom to look up their identifiers simultaneously.
+- Both checks return HTTP 429 with standard `{"error": {"code": "rate_limited", "message": "Too many attempts. Please wait a minute and try again."}}`.
+
+### Counting Only Failed Lookups
+- Lookups are checked against both limits *before* running the lookup query.
+- Attempts are **only recorded when the lookup fails** (resulting in the generic 404 `MemberNotFoundError`, which includes non-existent identifiers and invalid join codes).
+- Successful lookups (whether `taken: false` or `taken: true`) are never recorded and never increment the failure counter, ensuring legitimate member onboarding is never impeded by shared campus Wi-Fi IPs.
+
+### Bounded Memory Limiter
+- In `app/ratelimit.py`, `RateLimiter` enforces three memory-bounding guarantees:
+  1. Keys whose timestamps have all expired outside the 60-second window are immediately pruned from memory when checked.
+  2. A periodic cleanup pass over all keys runs at most once every 60 seconds to prune stale keys across the dictionary.
+  3. The total number of stored keys is strictly capped at 10,000 (`max_keys`). When the cap is reached upon inserting a new key, the key with the oldest latest attempt timestamp is evicted first.
+- The injectable clock (`set_clock`) is preserved for deterministic time-travel testing without sleeping.
+
+## 2. Capped Upload Reading (Fix 2)
+- **Vulnerability Addressed**: Previously, upload endpoints in `app/api/routes/imports.py` invoked `file.file.read()` into memory before evaluating the 5 MB file size limit, exposing free-tier servers to memory exhaustion from arbitrarily large uploads.
+- **Resolution**:
+  - Implemented `read_upload_capped(file, max_bytes=MAX_FILE_SIZE)` in `app/services/importer.py`.
+  - Reads at most `MAX_FILE_SIZE + 1` bytes (`5 * 1024 * 1024 + 1`).
+  - If the read chunk exceeds `MAX_FILE_SIZE`, it immediately raises HTTP 422 `PollValidationError("File size exceeds 5 MB limit.")` without reading any further data from the upload stream.
+  - Applied to both `preview_members_import` and `import_group_members`.
+
+
+
 
 
 

@@ -38,6 +38,17 @@ MAX_COLUMNS = 60
 MAX_ERROR_DETAILS = 100
 
 
+def read_upload_capped(file: Any, max_bytes: int = MAX_FILE_SIZE) -> bytes:
+    """Read at most max_bytes + 1 bytes from an uploaded file.
+
+    Raises 422 PollValidationError without reading further if upload exceeds max_bytes.
+    """
+    content = file.file.read(max_bytes + 1)
+    if len(content) > max_bytes:
+        raise PollValidationError("File size exceeds 5 MB limit.")
+    return content
+
+
 def validate_file_type_and_size(filename: str, content: bytes) -> str:
     """Validate file size, extension, and signature. Returns 'xlsx' or 'csv'."""
     if len(content) > MAX_FILE_SIZE:

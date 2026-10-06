@@ -13,8 +13,10 @@ from app.api.schemas import (
     MemberLookupRequest,
     MemberLookupResponse,
 )
+from app.config import settings
+from app.errors import MemberNotFoundError
 from app.models import GroupField, Member
-from app.ratelimit import lookup_limiter
+from app.ratelimit import get_client_ip, lookup_limiter
 from app.services.identity import (
     claim_member,
     get_group_by_join_code,
@@ -89,19 +91,25 @@ def lookup_member(
     request: Request,
     session: Session = Depends(get_db),
 ) -> MemberLookupResponse:
-    """Lookup member by identifier with rate limiting (public)."""
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        client_ip = forwarded.split(",")[0].strip()
-    elif request.client and request.client.host:
-        client_ip = request.client.host
-    else:
-        client_ip = "unknown"
+    """Lookup member by identifier with rate limiting on failed attempts (public)."""
+    client_ip = get_client_ip(request, settings.trusted_proxy_count)
 
-    # Enforce rate limit (10 attempts per minute per IP + join_code)
-    lookup_limiter.check(f"{client_ip}:{join_code}")
+    ip_key = f"ip:{client_ip}:{join_code}"
+    code_key = f"code:{join_code}"
 
-    member = lookup_member_by_identifier(session, join_code, payload.identifier)
+    # 1. Check rate limits before lookup runs (check per-IP first, then per-code)
+    lookup_limiter.check(ip_key, limit=settings.lookup_limit_per_ip)
+    lookup_limiter.check(code_key, limit=settings.lookup_limit_per_code)
+
+    # 2. Run lookup; record failure for both limits only when lookup fails (generic 404)
+    try:
+        member = lookup_member_by_identifier(session, join_code, payload.identifier)
+    except MemberNotFoundError:
+        lookup_limiter.record(ip_key)
+        lookup_limiter.record(code_key)
+        raise
+
+    # 3. Successful lookups are never recorded
     taken = member.claim_status in ("pending", "approved")
 
     return MemberLookupResponse(

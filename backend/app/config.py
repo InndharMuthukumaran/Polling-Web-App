@@ -25,6 +25,18 @@ class Settings(BaseSettings):
         default="http://localhost:5173",
         alias="CORS_ORIGINS",
     )
+    trusted_proxy_count: int = Field(
+        default=0,
+        alias="TRUSTED_PROXY_COUNT",
+    )
+    lookup_limit_per_ip: int = Field(
+        default=30,
+        alias="LOOKUP_LIMIT_PER_IP",
+    )
+    lookup_limit_per_code: int = Field(
+        default=300,
+        alias="LOOKUP_LIMIT_PER_CODE",
+    )
 
     @property
     def cors_origins_list(self) -> list[str]:
