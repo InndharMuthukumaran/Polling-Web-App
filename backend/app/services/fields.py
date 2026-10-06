@@ -197,6 +197,7 @@ def create_group_field(
     default_value: str | None = None,
     choices: list[str] | None = None,
     is_identifier: bool = False,
+    commit: bool = True,
 ) -> GroupField:
     """Create a new group field with locking and validation."""
     gid = resolve_uuid(group_id)
@@ -308,8 +309,11 @@ def create_group_field(
         for m in members:
             m.field_values = {**m.field_values, key: typed_default}
 
-    session.commit()
-    session.refresh(field)
+    if commit:
+        session.commit()
+        session.refresh(field)
+    else:
+        session.flush()
     return field
 
 

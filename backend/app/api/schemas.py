@@ -341,3 +341,30 @@ class MemberHistoryResponse(BaseModel):
     display_name: str
     identifier: str | None = None
     history: list[MemberPollHistoryItem]
+
+
+# ---------------------------------------------------------------------------
+# Spreadsheet Import Schemas
+# ---------------------------------------------------------------------------
+class ColumnPreview(BaseModel):
+    index: int
+    header: str
+
+
+class ImportPreviewResponse(BaseModel):
+    filename: str
+    sheet: str | None = None
+    columns: list[ColumnPreview]
+    total_rows: int
+    sample_rows: list[list[str]]
+    suggested_mapping: dict[str, str]
+
+
+class ImportResultResponse(BaseModel):
+    dry_run: bool
+    rows_total: int
+    rows_added: int
+    rows_skipped: int
+    fields_created: list[str]
+    errors: list[dict[str, Any]] = Field(default_factory=list)
+

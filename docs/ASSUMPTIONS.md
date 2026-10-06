@@ -455,6 +455,70 @@ This section documents the assumptions, choices, and architectural decisions mad
 - Until the web app is updated in Part R5 to incorporate the identifier lookup UI, groups with an identifier field must have `allow_name_list: true` enabled for the current web app to display member names on the join page.
 
 
+# Assumptions and Design Decisions (Part R2: Bulk Member Onboarding from Spreadsheets)
+
+This section documents assumptions and architectural decisions made for Part R2 (Bulk member onboarding from `.xlsx` and `.csv` files).
+
+## 1. Dependencies & Technology
+- Added `openpyxl>=3.1.0` (for Excel `.xlsx` reading and template generation) and `python-multipart>=0.0.9` (for FastAPI multipart file uploads) to `backend/pyproject.toml`.
+- Frontend remained untouched.
+
+## 2. File Parsing, Limits & Format Safety
+- **Supported Formats**: `.xlsx` (first worksheet only) and `.csv`.
+- **Format & Signature Checks**:
+  - Validated by file extension and signature.
+  - `.xlsx` files must begin with the zip signature `PK`.
+  - Files ending with `.xls` or `.xlsm` are rejected with: `"Please save the file as .xlsx or .csv."`
+  - Any unsupported extension is rejected with a clear 422 error.
+- **Safety Limits (422 validation_error naming limit)**:
+  - Maximum upload file size: 5 MB (`MAX_FILE_SIZE`).
+  - Maximum uncompressed zip size: 50 MB (`MAX_UNCOMPRESSED_SIZE`), inspected using `zipfile.ZipFile.infolist()` prior to loading with `openpyxl`.
+  - Maximum data rows: 2000 (`MAX_DATA_ROWS`).
+  - Maximum columns: 60 (`MAX_COLUMNS`).
+- **Parsing Mechanisms**:
+  - `.xlsx`: Loaded using `openpyxl.load_workbook(..., read_only=True, data_only=True)` (cached values, no formula execution).
+  - `.csv`: Decoded as UTF-8 with BOM support (`utf-8-sig`), falling back to `cp1252`. Delimiter is sniffed using `csv.Sniffer` restricted to `","`, `";"`, and `"\t"`, defaulting to comma.
+  - Header detection: The header row is the first non-blank row. Fully blank leading rows and inner blank rows are skipped.
+  - Trailing blank header cells are stripped; blank headers and case-insensitive duplicate headers within active columns are rejected with the column number.
+  - Row numbers reported in errors match the true 1-indexed spreadsheet row numbers.
+
+## 3. Cell Normalization & Conversion
+- `None` converts to empty string `""`.
+- Strings are trimmed of leading and trailing whitespace.
+- Booleans convert to `"TRUE"` or `"FALSE"`.
+- Dates and datetimes convert to `"YYYY-MM-DD"`.
+- Whole-number floats (such as `21.0`) convert to integer strings (`"21"`) for text fields or preview, and integers (`21`) for number fields.
+- Non-integer floats convert to plain strings or floats.
+- Integers convert to plain strings for text fields and integers for number fields.
+- Conversion precedes domain validation in `app/services/fields.py`.
+
+## 4. Mapping & New Field Creation
+- Mapping supports target `"name"`, field `key`, or `"skip"`.
+- Exactly one column must map to `"name"`. No two columns may map to the same target (other than `"skip"`).
+- Suggested mapping: Case- and space-insensitive match of headers to `Name`, `Full name`, and `Student name` as `"name"`, and field names or keys as their respective keys. Unmatched columns default to `"skip"`.
+- **New Fields from Sheet (`new_fields`)**:
+  - Allows creating fields from unmapped columns in the import payload.
+  - Defaults `field_type` to `"text"`.
+  - Created inside the same database transaction with `commit=False`, flushed to session.
+  - `is_identifier: true` is allowed only if the group has 0 members and no existing identifier field; otherwise fails with identical R1a validation messages.
+
+## 5. All-or-Nothing Import Execution
+- **Validation Reuse**: Every row is validated through R1a `validate_member_values_for_create` and persisted via `add_members_bulk`.
+- **Transaction Rollback**: Any validation error in any row rolls back the transaction (including any new fields created) and raises HTTP 422 with `details` containing up to 100 errors (`{row, field, message}` using sheet row numbers) and the total error count stated in the message.
+- **Duplicate Rules**:
+  - In-file duplicate identifiers error on the later row naming the earlier row.
+  - Duplicate identifier against existing members errors if `on_duplicate == "reject"`, or is skipped and counted if `on_duplicate == "skip"`. Existing members are never overwritten.
+  - When no identifier field exists, duplicate display names follow the same rules. When an identifier field exists, duplicate display names are permitted.
+- **Dry Run**: `dry_run=true` performs all parsing and validation and returns identical counts, rolling back the database session.
+
+## 6. Endpoints (`backend/app/api/routes/imports.py`)
+- `GET /api/v1/groups/{group_id}/members/template`: Returns template download with `Name` followed by fields in position order. For `.xlsx`, attaches openpyxl `DataValidation` on choice fields over rows 2..2001.
+- `POST /api/v1/groups/{group_id}/members/import/preview`: Multipart upload returning `{filename, sheet, columns, total_rows, sample_rows, suggested_mapping}` without saving.
+- `POST /api/v1/groups/{group_id}/members/import`: Multipart upload executing transactional all-or-nothing import.
+- All endpoints protected by `require_admin_for_group` requiring valid `X-Admin-Token`.
+
+
+
 
 
 
