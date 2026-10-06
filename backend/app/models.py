@@ -130,6 +130,9 @@ class GroupField(Base):
     )
 
     group: Mapped["Group"] = relationship("Group", back_populates="fields")
+    poll_inclusions: Mapped[list["PollIncludedField"]] = relationship(
+        "PollIncludedField", back_populates="field", cascade="all, delete-orphan"
+    )
 
 
 class Member(Base):
@@ -185,6 +188,9 @@ class Member(Base):
     )
     vote_history: Mapped[list["VoteHistory"]] = relationship(
         "VoteHistory", back_populates="member", cascade="all, delete-orphan"
+    )
+    poll_answers: Mapped[list["PollAnswer"]] = relationship(
+        "PollAnswer", back_populates="member", cascade="all, delete-orphan"
     )
 
     @property
@@ -263,6 +269,21 @@ class Poll(Base):
     )
     vote_history: Mapped[list["VoteHistory"]] = relationship(
         "VoteHistory", back_populates="poll", cascade="all, delete-orphan"
+    )
+    included_fields: Mapped[list["PollIncludedField"]] = relationship(
+        "PollIncludedField",
+        back_populates="poll",
+        cascade="all, delete-orphan",
+        order_by="PollIncludedField.position",
+    )
+    poll_fields: Mapped[list["PollField"]] = relationship(
+        "PollField",
+        back_populates="poll",
+        cascade="all, delete-orphan",
+        order_by="PollField.position",
+    )
+    answers: Mapped[list["PollAnswer"]] = relationship(
+        "PollAnswer", back_populates="poll", cascade="all, delete-orphan"
     )
 
 
@@ -386,3 +407,99 @@ class VoteHistory(Base):
     option: Mapped["PollOption"] = relationship(
         "PollOption", back_populates="vote_history"
     )
+
+
+class PollIncludedField(Base):
+    """Association linking a poll to an included group field, with display ordering."""
+
+    __tablename__ = "poll_included_fields"
+
+    poll_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("polls.id", ondelete="CASCADE"), primary_key=True
+    )
+    field_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("group_fields.id", ondelete="CASCADE"), primary_key=True
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    poll: Mapped["Poll"] = relationship("Poll", back_populates="included_fields")
+    field: Mapped["GroupField"] = relationship("GroupField", back_populates="poll_inclusions")
+
+    @property
+    def id(self) -> uuid.UUID:
+        return self.field.id
+
+    @property
+    def key(self) -> str:
+        return self.field.key
+
+    @property
+    def name(self) -> str:
+        return self.field.name
+
+    @property
+    def field_type(self) -> str:
+        return self.field.field_type
+
+
+class PollField(Base):
+    """A custom poll-only field answered by members for this poll."""
+
+    __tablename__ = "poll_fields"
+    __table_args__ = (
+        UniqueConstraint("poll_id", "key", name="uq_poll_fields_poll_key"),
+        CheckConstraint(
+            "field_type IN ('text', 'number', 'choice', 'link')",
+            name="ck_poll_fields_field_type",
+        ),
+        Index("ix_poll_fields_poll_lower_name", "poll_id", text("lower(name)"), unique=True),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, default=uuid.uuid4
+    )
+    poll_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("polls.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    key: Mapped[str] = mapped_column(String(80), nullable=False)
+    name: Mapped[str] = mapped_column(String(60), nullable=False)
+    field_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    is_required: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    default_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    choices: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime, default=utc_now, nullable=False
+    )
+
+    poll: Mapped["Poll"] = relationship("Poll", back_populates="poll_fields")
+
+
+class PollAnswer(Base):
+    """Member answers to poll-only fields for a specific poll."""
+
+    __tablename__ = "poll_answers"
+    __table_args__ = (
+        UniqueConstraint("poll_id", "member_id", name="uq_poll_answers_poll_member"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, default=uuid.uuid4
+    )
+    poll_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("polls.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    member_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("members.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    values: Mapped[dict] = mapped_column(
+        JSONB, default=dict, server_default="{}", nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime, default=utc_now, nullable=False
+    )
+
+    poll: Mapped["Poll"] = relationship("Poll", back_populates="answers")
+    member: Mapped["Member"] = relationship("Member", back_populates="poll_answers")

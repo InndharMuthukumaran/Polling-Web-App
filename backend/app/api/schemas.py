@@ -201,6 +201,14 @@ class PollOptionCreate(BaseModel):
     role: str
 
 
+class PollFieldCreate(BaseModel):
+    name: str = Field(..., min_length=1)
+    field_type: str
+    is_required: bool = False
+    default_value: str | None = None
+    choices: list[str] | None = None
+
+
 class PollCreate(BaseModel):
     name: str = Field(..., min_length=1)
     description_raw: str | None = None
@@ -208,12 +216,36 @@ class PollCreate(BaseModel):
     options: list[PollOptionCreate] = Field(..., min_length=2)
     deadline: datetime | None = None
     completion_time_mode: Literal["first", "last"] = "last"
+    included_field_ids: list[UUID] | None = None
+    poll_fields: list[PollFieldCreate] | None = None
 
 
 class PollOptionDetail(BaseModel):
     id: UUID
     label: str
     role: str
+    position: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class IncludedFieldResponse(BaseModel):
+    id: UUID
+    key: str
+    name: str
+    field_type: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PollFieldResponse(BaseModel):
+    id: UUID
+    key: str
+    name: str
+    field_type: str
+    is_required: bool
+    default_value: str | None = None
+    choices: list[str] | None = None
     position: int
 
     model_config = ConfigDict(from_attributes=True)
@@ -231,6 +263,8 @@ class PollDetailResponse(BaseModel):
     created_at: datetime
     closed_at: datetime | None = None
     options: list[PollOptionDetail]
+    included_fields: list[IncludedFieldResponse] = Field(default_factory=list)
+    poll_fields: list[PollFieldResponse] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -245,10 +279,21 @@ class PollSummaryResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-# Public Poll View: NO roles, NO votes, includes join_code and group_name
 class PublicPollOption(BaseModel):
     id: UUID
     label: str
+    position: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PublicPollField(BaseModel):
+    key: str
+    name: str
+    field_type: str
+    is_required: bool
+    default_value: str | None = None
+    choices: list[str] | None = None
     position: int
 
     model_config = ConfigDict(from_attributes=True)
@@ -264,6 +309,7 @@ class PublicPollResponse(BaseModel):
     options: list[PublicPollOption]
     group_name: str
     join_code: str
+    poll_fields: list[PublicPollField] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -290,6 +336,17 @@ class MemberPollHistoryItem(BaseModel):
 class MemberPollMeResponse(BaseModel):
     selected_option_ids: list[UUID]
     history: list[MemberPollHistoryItem]
+    answers: dict[str, Any] = Field(default_factory=dict)
+    answers_updated_at: datetime | None = None
+
+
+class PollAnswersRequest(BaseModel):
+    values: dict[str, Any]
+
+
+class PollAnswersResponse(BaseModel):
+    answers: dict[str, Any]
+    answers_updated_at: datetime
 
 
 # ---------------------------------------------------------------------------
@@ -367,4 +424,43 @@ class ImportResultResponse(BaseModel):
     rows_skipped: int
     fields_created: list[str]
     errors: list[dict[str, Any]] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Poll Results Table Schemas
+# ---------------------------------------------------------------------------
+class PollResultsPollInfo(BaseModel):
+    id: UUID
+    name: str
+    status: str
+    deadline: datetime | None = None
+    allow_multiple: bool
+
+
+class PollResultsColumn(BaseModel):
+    source: Literal["group", "poll"]
+    key: str
+    name: str
+    field_type: str
+    is_identifier: bool
+
+
+class PollResultsRow(BaseModel):
+    member_id: UUID
+    display_name: str
+    identifier: str | None = None
+    status: str
+    selected_options: list[str]
+    late: bool | None = None
+    completed_at: datetime | None = None
+    group_values: dict[str, Any] = Field(default_factory=dict)
+    answers: dict[str, Any] = Field(default_factory=dict)
+    answers_updated_at: datetime | None = None
+    answers_complete: bool
+
+
+class PollResultsResponse(BaseModel):
+    poll: PollResultsPollInfo
+    columns: list[PollResultsColumn]
+    rows: list[PollResultsRow]
 

@@ -1,7 +1,7 @@
 """Poll viewing, voting, status, and administration endpoints."""
 
 from uuid import UUID
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -17,24 +17,32 @@ from app.api.schemas import (
     MemberPollHistoryItem,
     MemberPollMeResponse,
     MemberTargetStatusSchema,
+    PollAnswersRequest,
+    PollAnswersResponse,
     PollCountsSchema,
     PollDetailResponse,
+    PollResultsResponse,
     PollStatusInfoSchema,
     PollStatusResponse,
+    PublicPollField,
     PublicPollOption,
     PublicPollResponse,
     VoteRequest,
     VoteResponse,
 )
-from app.errors import GroupNotFoundError, PollNotFoundError
-from app.models import Group, GroupField, Member, Poll, Vote
+from app.errors import GroupNotFoundError, PollNotFoundError, PollValidationError
+from app.models import Group, GroupField, Member, Poll, PollAnswer, Vote
 from app.services.polls import (
     all_reached,
     cast_vote,
     close_poll,
+    export_poll_results_csv,
+    export_poll_results_xlsx,
     get_member_history,
+    get_poll_results,
     get_poll_status,
     remove_vote,
+    save_poll_answers,
 )
 
 router = APIRouter(prefix="/polls", tags=["Polls"])
@@ -57,6 +65,7 @@ def get_public_poll(
 
     # Sort options by position
     sorted_options = sorted(poll.options, key=lambda o: o.position)
+    sorted_poll_fields = sorted(poll.poll_fields, key=lambda f: f.position)
 
     return PublicPollResponse(
         id=poll.id,
@@ -71,6 +80,10 @@ def get_public_poll(
         ],
         group_name=group.name,
         join_code=group.join_code,
+        poll_fields=[
+            PublicPollField.model_validate(pf)
+            for pf in sorted_poll_fields
+        ],
     )
 
 
@@ -120,9 +133,33 @@ def get_my_poll_view(
     ).all()
     history = get_member_history(session, poll.id, member.id)
 
+    ans = session.scalar(
+        select(PollAnswer).where(
+            PollAnswer.poll_id == poll.id,
+            PollAnswer.member_id == member.id,
+        )
+    )
+
     return MemberPollMeResponse(
         selected_option_ids=[v.option_id for v in votes],
         history=[MemberPollHistoryItem.model_validate(h) for h in history],
+        answers=ans.values if ans and ans.values else {},
+        answers_updated_at=ans.updated_at if ans else None,
+    )
+
+
+@router.put("/{poll_id}/answers", response_model=PollAnswersResponse)
+def update_poll_answers(
+    payload: PollAnswersRequest,
+    target: tuple[Poll, Member] = Depends(require_approved_member_for_poll),
+    session: Session = Depends(get_db),
+) -> PollAnswersResponse:
+    """Save or partially update answers to poll-only fields (approved member only)."""
+    poll, member = target
+    answer = save_poll_answers(session, poll.id, member.id, payload.values)
+    return PollAnswersResponse(
+        answers=answer.values,
+        answers_updated_at=answer.updated_at,
     )
 
 
@@ -264,3 +301,36 @@ def close_poll_view(
     poll, _ = target
     closed_poll = close_poll(session, poll.id)
     return PollDetailResponse.model_validate(closed_poll)
+
+
+@router.get("/{poll_id}/results")
+def get_poll_results_endpoint(
+    poll_id: UUID,
+    format: str = Query("json"),
+    target: tuple[Poll, Group] = Depends(require_admin_for_poll),
+    session: Session = Depends(get_db),
+):
+    """Return poll results table in JSON, CSV, or XLSX format (admin only)."""
+    poll, _ = target
+    fmt = format.lower()
+    if fmt not in ("json", "csv", "xlsx"):
+        raise PollValidationError(f"Invalid format '{format}'. Allowed: json, csv, xlsx.")
+
+    results_data = get_poll_results(session, poll.id)
+
+    if fmt == "json":
+        return PollResultsResponse.model_validate(results_data)
+    elif fmt == "csv":
+        csv_bytes, filename = export_poll_results_csv(results_data)
+        return Response(
+            content=csv_bytes,
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    else:  # xlsx
+        xlsx_bytes, filename = export_poll_results_xlsx(results_data)
+        return Response(
+            content=xlsx_bytes,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )

@@ -1,16 +1,21 @@
 """Polls service layer implementing all domain rules and operations."""
 
 from collections.abc import Sequence
+import csv
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import io
+import re
 from typing import Any
 import uuid
 
+import openpyxl
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
 from app.errors import (
+    ClaimNotApprovedError,
     GroupNotFoundError,
     MemberGroupMismatchError,
     MemberInactiveError,
@@ -21,9 +26,26 @@ from app.errors import (
     PollNotFoundError,
     PollValidationError,
 )
-from app.models import Group, GroupField, Member, Poll, PollOption, Vote, VoteHistory
+from app.models import (
+    Group,
+    GroupField,
+    Member,
+    Poll,
+    PollAnswer,
+    PollField,
+    PollIncludedField,
+    PollOption,
+    Vote,
+    VoteHistory,
+)
 from app.security import generate_join_code
-from app.services.fields import validate_member_values_for_create
+from app.services.fields import (
+    generate_field_key,
+    is_blank,
+    validate_answers_for_update,
+    validate_field_definition,
+    validate_member_values_for_create,
+)
 
 VALID_ROLES = frozenset({"target", "in_progress", "excused", "not_yet"})
 VALID_COMPLETION_MODES = frozenset({"first", "last"})
@@ -213,8 +235,10 @@ def create_poll(
     deadline: datetime | None = None,
     completion_time_mode: str = "last",
     now: datetime | None = None,
+    included_field_ids: Sequence[uuid.UUID | str] | None = None,
+    poll_fields: Sequence[dict[str, Any]] | None = None,
 ) -> Poll:
-    """Create a new poll with validated options."""
+    """Create a new poll with validated options, included group fields, and poll-only fields."""
     gid = resolve_uuid(group_id)
     group = session.get(Group, gid)
     if not group:
@@ -230,6 +254,84 @@ def create_poll(
         raise PollValidationError(
             f"Invalid completion_time_mode: '{completion_time_mode}'. Expected one of {list(VALID_COMPLETION_MODES)}."
         )
+
+    # 1. Fetch group fields and identifier
+    all_group_fields = list(
+        session.scalars(
+            select(GroupField)
+            .where(GroupField.group_id == gid)
+            .order_by(GroupField.position)
+        ).all()
+    )
+    group_field_map = {f.id: f for f in all_group_fields}
+    identifier_field = next((f for f in all_group_fields if f.is_identifier), None)
+
+    # 2. Included group fields validation
+    seen_included_ids: set[uuid.UUID] = set()
+    ordered_included_fields: list[GroupField] = []
+    if included_field_ids:
+        for raw_fid in included_field_ids:
+            fid = resolve_uuid(raw_fid)
+            if fid not in group_field_map:
+                raise PollValidationError(f"Field {fid} does not belong to group {gid}.")
+            if fid in seen_included_ids:
+                continue
+            seen_included_ids.add(fid)
+            gf = group_field_map[fid]
+            # Rule: The identifier field is not stored here; it is added automatically when results are built.
+            if identifier_field and gf.id == identifier_field.id:
+                continue
+            ordered_included_fields.append(gf)
+
+    # 3. Poll-only fields validation
+    validated_poll_fields: list[dict[str, Any]] = []
+    if poll_fields:
+        if len(poll_fields) > 15:
+            raise PollValidationError("A poll can have at most 15 poll-only fields.")
+
+        seen_poll_names: set[str] = set()
+        existing_poll_keys: set[str] = set()
+
+        for pf_spec in poll_fields:
+            raw_name = pf_spec.get("name", "")
+            ftype = pf_spec.get("field_type", "")
+            is_req = bool(pf_spec.get("is_required", False))
+            dval = pf_spec.get("default_value")
+            choices = pf_spec.get("choices")
+
+            clean_name, clean_choices, clean_default = validate_field_definition(
+                raw_name,
+                ftype,
+                choices=choices,
+                default_value=dval,
+                is_required=is_req,
+                is_identifier=False,
+            )
+
+            name_cf = clean_name.casefold()
+            if name_cf in seen_poll_names:
+                raise PollValidationError(f"Duplicate poll field name: '{clean_name}'.")
+            if identifier_field and name_cf == identifier_field.name.casefold():
+                raise PollValidationError(
+                    f"Poll field name '{clean_name}' conflicts with group identifier field."
+                )
+            if any(name_cf == gf.name.casefold() for gf in ordered_included_fields):
+                raise PollValidationError(
+                    f"Poll field name '{clean_name}' conflicts with included group field."
+                )
+
+            seen_poll_names.add(name_cf)
+            key = generate_field_key(clean_name, existing_poll_keys)
+            existing_poll_keys.add(key)
+
+            validated_poll_fields.append({
+                "key": key,
+                "name": clean_name,
+                "field_type": ftype,
+                "is_required": is_req,
+                "default_value": clean_default,
+                "choices": clean_choices,
+            })
 
     # Convert options to PollOptionInput objects
     normalized_options: list[PollOptionInput] = []
@@ -303,6 +405,31 @@ def create_poll(
             created_at=current_time,
         )
         session.add(option)
+
+    # Add included fields (position 1-based)
+    for position, gf in enumerate(ordered_included_fields, start=1):
+        pif = PollIncludedField(
+            poll_id=poll.id,
+            field_id=gf.id,
+            position=position,
+        )
+        session.add(pif)
+
+    # Add poll-only fields (position 1-based)
+    for position, pf_data in enumerate(validated_poll_fields, start=1):
+        pf = PollField(
+            id=uuid.uuid4(),
+            poll_id=poll.id,
+            key=pf_data["key"],
+            name=pf_data["name"],
+            field_type=pf_data["field_type"],
+            is_required=pf_data["is_required"],
+            default_value=pf_data["default_value"],
+            choices=pf_data["choices"],
+            position=position,
+            created_at=current_time,
+        )
+        session.add(pf)
 
     session.commit()
     session.refresh(poll)
@@ -710,3 +837,406 @@ def get_member_history(
         )
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Poll Answers Management
+# ---------------------------------------------------------------------------
+
+
+def save_poll_answers(
+    session: Session,
+    poll_id: uuid.UUID | str,
+    member_id: uuid.UUID | str,
+    values: dict[str, Any],
+    now: datetime | None = None,
+) -> PollAnswer:
+    """Save or update member answers for a poll with row locking on the poll."""
+    pid = resolve_uuid(poll_id)
+    mid = resolve_uuid(member_id)
+    current_time = ensure_utc(now) or datetime.now(timezone.utc)
+
+    # Concurrency lock on poll row with populate_existing
+    poll = session.scalar(
+        select(Poll)
+        .where(Poll.id == pid)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if not poll:
+        raise PollNotFoundError(f"Poll {pid} not found.")
+
+    if poll.status == "closed":
+        raise PollClosedError("Cannot answer a closed poll.")
+
+    member = session.get(Member, mid)
+    if not member:
+        raise MemberNotFoundError(f"Member {mid} not found.")
+
+    if member.group_id != poll.group_id:
+        raise MemberGroupMismatchError("This poll belongs to a different group.")
+
+    if member.claim_status != "approved":
+        raise ClaimNotApprovedError("Member claim has not been approved.")
+
+    if not member.is_active:
+        raise MemberInactiveError("Member is inactive.")
+
+    poll_fields = list(
+        session.scalars(
+            select(PollField)
+            .where(PollField.poll_id == poll.id)
+            .order_by(PollField.position)
+        ).all()
+    )
+
+    answer = session.scalar(
+        select(PollAnswer)
+        .where(PollAnswer.poll_id == poll.id, PollAnswer.member_id == member.id)
+        .with_for_update()
+    )
+
+    current_answers = dict(answer.values) if answer and answer.values else {}
+    updated_answers = validate_answers_for_update(poll_fields, current_answers, values)
+
+    if answer is None:
+        answer = PollAnswer(
+            id=uuid.uuid4(),
+            poll_id=poll.id,
+            member_id=member.id,
+            values=dict(updated_answers),  # Assign a fresh dict
+            updated_at=current_time,
+        )
+        session.add(answer)
+    else:
+        answer.values = dict(updated_answers)  # Assign a fresh dict
+        answer.updated_at = current_time
+
+    session.commit()
+    session.refresh(answer)
+    return answer
+
+
+# ---------------------------------------------------------------------------
+# Poll Results Table & Export
+# ---------------------------------------------------------------------------
+
+
+def get_poll_results(
+    session: Session,
+    poll_id: uuid.UUID | str,
+) -> dict[str, Any]:
+    """Build poll results table data for admin view."""
+    pid = resolve_uuid(poll_id)
+    poll = session.get(Poll, pid)
+    if not poll:
+        raise PollNotFoundError(f"Poll {pid} not found.")
+
+    group = session.get(Group, poll.group_id)
+    if not group:
+        raise GroupNotFoundError(f"Group {poll.group_id} not found.")
+
+    # 1. Identifier field (if any)
+    id_field = session.scalar(
+        select(GroupField).where(
+            GroupField.group_id == group.id,
+            GroupField.is_identifier.is_(True),
+        )
+    )
+
+    # 2. Included group fields in position order (skipping identifier if present)
+    included_assocs = list(
+        session.scalars(
+            select(PollIncludedField)
+            .where(PollIncludedField.poll_id == poll.id)
+            .order_by(PollIncludedField.position)
+        ).all()
+    )
+    included_group_fields: list[GroupField] = []
+    for assoc in included_assocs:
+        f = assoc.field
+        if f is not None:
+            if id_field and f.id == id_field.id:
+                continue
+            included_group_fields.append(f)
+
+    # 3. Poll-only fields in position order
+    poll_fields = list(
+        session.scalars(
+            select(PollField)
+            .where(PollField.poll_id == poll.id)
+            .order_by(PollField.position)
+        ).all()
+    )
+
+    # Build columns list
+    columns: list[dict[str, Any]] = []
+    if id_field:
+        columns.append({
+            "source": "group",
+            "key": id_field.key,
+            "name": id_field.name,
+            "field_type": id_field.field_type,
+            "is_identifier": True,
+        })
+    for gf in included_group_fields:
+        columns.append({
+            "source": "group",
+            "key": gf.key,
+            "name": gf.name,
+            "field_type": gf.field_type,
+            "is_identifier": False,
+        })
+    for pf in poll_fields:
+        columns.append({
+            "source": "poll",
+            "key": pf.key,
+            "name": pf.name,
+            "field_type": pf.field_type,
+            "is_identifier": False,
+        })
+
+    # Active members only
+    active_members = list(
+        session.scalars(
+            select(Member)
+            .where(Member.group_id == group.id, Member.is_active.is_(True))
+            .order_by(Member.display_name, Member.created_at, Member.id)
+        ).all()
+    )
+
+    # Status mapping from get_poll_status
+    status_result = get_poll_status(session, poll.id)
+    status_map: dict[uuid.UUID, tuple[str, bool | None, datetime | None]] = {}
+    for item in status_result.at_target:
+        status_map[item.member.id] = ("at_target", item.late, item.completed_at)
+    for m in status_result.excused:
+        status_map[m.id] = ("excused", None, None)
+    for m in status_result.behind_target:
+        status_map[m.id] = ("behind_target", None, None)
+    for m in status_result.not_voted:
+        status_map[m.id] = ("not_voted", None, None)
+
+    # Current votes mapping: member_id -> list of selected option labels (position order)
+    votes = list(
+        session.scalars(
+            select(Vote).where(Vote.poll_id == poll.id)
+        ).all()
+    )
+    votes_sorted = sorted(votes, key=lambda v: v.option.position if v.option else 0)
+    member_votes: dict[uuid.UUID, list[str]] = {m.id: [] for m in active_members}
+    for v in votes_sorted:
+        if v.member_id in member_votes and v.option:
+            member_votes[v.member_id].append(v.option.label)
+
+    # Member answers mapping
+    answers = list(
+        session.scalars(
+            select(PollAnswer).where(PollAnswer.poll_id == poll.id)
+        ).all()
+    )
+    answers_map: dict[uuid.UUID, PollAnswer] = {a.member_id: a for a in answers}
+
+    # Required poll fields for answers_complete calculation
+    required_poll_fields = [pf for pf in poll_fields if pf.is_required]
+
+    rows: list[dict[str, Any]] = []
+    group_keys = ([id_field.key] if id_field else []) + [gf.key for gf in included_group_fields]
+
+    for m in active_members:
+        st_info = status_map.get(m.id, ("not_voted", None, None))
+        status_name, late, completed_at = st_info
+
+        ans_obj = answers_map.get(m.id)
+        member_ans = dict(ans_obj.values) if ans_obj and ans_obj.values else {}
+        ans_updated_at = ans_obj.updated_at if ans_obj else None
+
+        # answers_complete calculation:
+        # A member counts as answers_complete only when every required poll-only field has a non-blank saved value.
+        # Members who never saved anything are incomplete if any field is required, and complete if no field is required.
+        if not required_poll_fields:
+            answers_complete = True
+        else:
+            if ans_obj is None or not ans_obj.values:
+                answers_complete = False
+            else:
+                answers_complete = all(not is_blank(member_ans.get(pf.key)) for pf in required_poll_fields)
+
+        # group_values dict (live read from m.field_values)
+        m_field_values = m.field_values or {}
+        g_vals: dict[str, Any] = {}
+        for k in group_keys:
+            if k in m_field_values:
+                g_vals[k] = m_field_values[k]
+
+        identifier_val: str | None = None
+        if id_field and id_field.key in m_field_values:
+            raw_v = m_field_values[id_field.key]
+            identifier_val = str(raw_v) if not is_blank(raw_v) else None
+
+        rows.append({
+            "member_id": m.id,
+            "display_name": m.display_name,
+            "identifier": identifier_val,
+            "status": status_name,
+            "selected_options": member_votes.get(m.id, []),
+            "late": late,
+            "completed_at": completed_at,
+            "group_values": g_vals,
+            "answers": member_ans,
+            "answers_updated_at": ans_updated_at,
+            "answers_complete": answers_complete,
+        })
+
+    poll_info = {
+        "id": poll.id,
+        "name": poll.name,
+        "status": poll.status,
+        "deadline": poll.deadline,
+        "allow_multiple": poll.allow_multiple,
+    }
+
+    return {
+        "poll": poll_info,
+        "columns": columns,
+        "rows": rows,
+    }
+
+
+def make_safe_filename(poll_name: str, ext: str) -> str:
+    """Generate safe filename for download from poll name."""
+    safe = re.sub(r'[^a-zA-Z0-9_\-]+', '_', poll_name.strip())
+    safe = safe.strip('_')
+    if not safe:
+        safe = "poll_results"
+    return f"{safe[:100]}.{ext}"
+
+
+def sanitize_formula_injection(val: Any) -> Any:
+    """Prepend single quote to text cells starting with formula trigger chars (=, +, -, @)."""
+    if val is None:
+        return ""
+    if isinstance(val, bool):
+        return str(val)
+    if isinstance(val, (int, float)):
+        return val
+    s = str(val)
+    stripped = s.strip()
+    if stripped and stripped[0] in ("=", "+", "-", "@"):
+        return f"'{s}"
+    return s
+
+
+def export_poll_results_csv(results: dict[str, Any]) -> tuple[bytes, str]:
+    """Generate CSV bytes (UTF-8 with BOM) and safe filename for poll results."""
+    poll_name = results["poll"]["name"]
+    filename = make_safe_filename(poll_name, "csv")
+
+    columns = results["columns"]
+    headers = ["Name"] + [col["name"] for col in columns] + [
+        "Status",
+        "Selected options",
+        "Late",
+        "Completed at",
+        "Answers complete",
+    ]
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([sanitize_formula_injection(h) for h in headers])
+
+    for row in results["rows"]:
+        row_cells: list[Any] = [row["display_name"]]
+        for col in columns:
+            if col["source"] == "group":
+                val = row["group_values"].get(col["key"], "")
+            else:
+                val = row["answers"].get(col["key"], "")
+            row_cells.append(val)
+
+        row_cells.append(row["status"])
+        row_cells.append("; ".join(row["selected_options"]))
+        if row["late"] is True:
+            row_cells.append("Yes")
+        elif row["late"] is False:
+            row_cells.append("No")
+        else:
+            row_cells.append("")
+
+        comp = row["completed_at"]
+        if comp is not None:
+            comp_dt = ensure_utc(comp)
+            row_cells.append(comp_dt.isoformat())
+        else:
+            row_cells.append("")
+
+        row_cells.append("Yes" if row["answers_complete"] else "No")
+        writer.writerow([sanitize_formula_injection(cell) for cell in row_cells])
+
+    csv_bytes = output.getvalue().encode("utf-8-sig")
+    return csv_bytes, filename
+
+
+def export_poll_results_xlsx(results: dict[str, Any]) -> tuple[bytes, str]:
+    """Generate Excel (.xlsx) bytes and safe filename for poll results."""
+    poll_name = results["poll"]["name"]
+    filename = make_safe_filename(poll_name, "xlsx")
+
+    columns = results["columns"]
+    headers = ["Name"] + [col["name"] for col in columns] + [
+        "Status",
+        "Selected options",
+        "Late",
+        "Completed at",
+        "Answers complete",
+    ]
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Poll Results"
+
+    for c_idx, h in enumerate(headers, start=1):
+        sanitized = sanitize_formula_injection(h)
+        cell = ws.cell(row=1, column=c_idx, value=str(sanitized))
+        cell.data_type = "s"
+
+    for r_idx, row in enumerate(results["rows"], start=2):
+        row_cells: list[Any] = [row["display_name"]]
+        for col in columns:
+            if col["source"] == "group":
+                val = row["group_values"].get(col["key"], "")
+            else:
+                val = row["answers"].get(col["key"], "")
+            row_cells.append(val)
+
+        row_cells.append(row["status"])
+        row_cells.append("; ".join(row["selected_options"]))
+        if row["late"] is True:
+            row_cells.append("Yes")
+        elif row["late"] is False:
+            row_cells.append("No")
+        else:
+            row_cells.append("")
+
+        comp = row["completed_at"]
+        if comp is not None:
+            comp_dt = ensure_utc(comp)
+            row_cells.append(comp_dt.isoformat())
+        else:
+            row_cells.append("")
+
+        row_cells.append("Yes" if row["answers_complete"] else "No")
+
+        for c_idx, val in enumerate(row_cells, start=1):
+            sanitized = sanitize_formula_injection(val)
+            cell = ws.cell(row=r_idx, column=c_idx)
+            if isinstance(sanitized, (int, float)) and not isinstance(sanitized, bool):
+                cell.value = sanitized
+                cell.data_type = "n"
+            else:
+                cell.value = str(sanitized) if sanitized is not None else ""
+                cell.data_type = "s"
+
+    out_stream = io.BytesIO()
+    wb.save(out_stream)
+    return out_stream.getvalue(), filename

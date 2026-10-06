@@ -173,6 +173,11 @@ def create_group_poll(
         PollOptionInput(label=opt.label, role=opt.role)
         for opt in payload.options
     ]
+    poll_fields_data = (
+        [pf.model_dump() for pf in payload.poll_fields]
+        if payload.poll_fields is not None
+        else None
+    )
     poll = create_poll(
         session,
         group_id=group.id,
@@ -182,6 +187,8 @@ def create_group_poll(
         allow_multiple=payload.allow_multiple,
         deadline=payload.deadline,
         completion_time_mode=payload.completion_time_mode,
+        included_field_ids=payload.included_field_ids,
+        poll_fields=poll_fields_data,
     )
     return PollDetailResponse.model_validate(poll)
 

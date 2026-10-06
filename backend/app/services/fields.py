@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 import math
 import re
-from typing import Any
+from typing import Any, Protocol, Sequence, runtime_checkable
 import uuid
 
 from sqlalchemy import func, select
@@ -15,6 +15,18 @@ from app.errors import (
     PollValidationError,
 )
 from app.models import Group, GroupField, Member
+
+
+@runtime_checkable
+class FieldLike(Protocol):
+    """Protocol for field-like objects (GroupField or PollField)."""
+
+    key: str
+    name: str
+    field_type: str
+    is_required: bool
+    default_value: str | None
+    choices: list[str] | None
 
 
 def resolve_uuid(val: uuid.UUID | str) -> uuid.UUID:
@@ -183,6 +195,57 @@ def parse_default_value(
     )
 
 
+def validate_field_definition(
+    name: str,
+    field_type: str,
+    choices: list[str] | None = None,
+    default_value: str | None = None,
+    is_required: bool = False,
+    is_identifier: bool = False,
+) -> tuple[str, list[str] | None, str | None]:
+    """Validate definition attributes common to GroupField and PollField.
+
+    Returns (clean_name, clean_choices, clean_default_value_str).
+    """
+    if not isinstance(name, str) or not (1 <= len(name.strip()) <= 60):
+        raise PollValidationError("Field name must be between 1 and 60 characters.")
+    clean_name = name.strip()
+
+    allowed_types = {"text", "number", "choice", "link"}
+    if field_type not in allowed_types:
+        raise PollValidationError(
+            f"Invalid field_type '{field_type}'. Allowed types: {sorted(allowed_types)}."
+        )
+
+    # Choices validation
+    clean_choices: list[str] | None = None
+    if field_type == "choice":
+        clean_choices = validate_choices(choices)
+    elif choices is not None:
+        raise PollValidationError(
+            f"Field type '{field_type}' must not have choices."
+        )
+
+    # Identifier validation
+    if is_identifier:
+        if field_type != "text":
+            raise PollValidationError("Only a text field can be the identifier.")
+        if not is_blank(default_value):
+            raise PollValidationError(
+                "An identifier field cannot have a default value."
+            )
+
+    # Default value validation
+    clean_default: str | None = None
+    if not is_blank(default_value):
+        validated_default = validate_and_canonicalize_value(
+            field_type, default_value, clean_choices, field_name=clean_name
+        )
+        clean_default = str(validated_default)
+
+    return clean_name, clean_choices, clean_default
+
+
 # ---------------------------------------------------------------------------
 # CRUD Services
 # ---------------------------------------------------------------------------
@@ -220,9 +283,14 @@ def create_group_field(
     if len(existing_fields) >= 30:
         raise PollValidationError("A group can have at most 30 fields.")
 
-    if not isinstance(name, str) or not (1 <= len(name.strip()) <= 60):
-        raise PollValidationError("Field name must be between 1 and 60 characters.")
-    clean_name = name.strip()
+    clean_name, clean_choices, clean_default = validate_field_definition(
+        name,
+        field_type,
+        choices=choices,
+        default_value=default_value,
+        is_required=is_required,
+        is_identifier=is_identifier,
+    )
 
     # Unique per group ignoring case
     if any(f.name.casefold() == clean_name.casefold() for f in existing_fields):
@@ -230,40 +298,11 @@ def create_group_field(
             f"Field with name '{clean_name}' already exists in group."
         )
 
-    allowed_types = {"text", "number", "choice", "link"}
-    if field_type not in allowed_types:
-        raise PollValidationError(
-            f"Invalid field_type '{field_type}'. Allowed types: {sorted(allowed_types)}."
-        )
-
-    # Choices validation
-    clean_choices: list[str] | None = None
-    if field_type == "choice":
-        clean_choices = validate_choices(choices)
-    elif choices is not None:
-        raise PollValidationError(
-            f"Field type '{field_type}' must not have choices."
-        )
-
-    # Identifier validation
+    # Identifier validation against existing fields
     if is_identifier:
-        if field_type != "text":
-            raise PollValidationError("Only a text field can be the identifier.")
         if any(f.is_identifier for f in existing_fields):
             raise PollValidationError("Group already has an identifier field.")
         is_required = True
-        if not is_blank(default_value):
-            raise PollValidationError(
-                "An identifier field cannot have a default value."
-            )
-
-    # Default value validation
-    clean_default: str | None = None
-    if not is_blank(default_value):
-        validated_default = validate_and_canonicalize_value(
-            field_type, default_value, clean_choices, field_name=clean_name
-        )
-        clean_default = str(validated_default)
 
     # Check members count
     member_count = session.scalar(
@@ -558,7 +597,7 @@ def list_group_fields(
 
 
 def validate_member_values_for_create(
-    fields: list[GroupField],
+    fields: Sequence[FieldLike],
     raw_values: dict[str, Any] | None,
     row: int | None = None,
 ) -> tuple[dict[str, Any], str | None]:
@@ -616,7 +655,7 @@ def validate_member_values_for_create(
                     else None,
                 )
 
-        if field.is_identifier:
+        if getattr(field, "is_identifier", False):
             id_val = cleaned_values.get(field.key)
             if is_blank(id_val):
                 raise PollValidationError(
@@ -637,7 +676,7 @@ def validate_member_values_for_create(
 
 
 def validate_member_values_for_update(
-    fields: list[GroupField],
+    fields: Sequence[FieldLike],
     current_values: dict[str, Any],
     new_values: dict[str, Any],
 ) -> tuple[dict[str, Any], str | None]:
@@ -676,7 +715,7 @@ def validate_member_values_for_update(
 
     # Recalculate identifier if an identifier field exists
     identifier_val: str | None = None
-    id_field = next((f for f in fields if f.is_identifier), None)
+    id_field = next((f for f in fields if getattr(f, "is_identifier", False)), None)
     if id_field:
         val = updated.get(id_field.key)
         if is_blank(val):
@@ -686,3 +725,49 @@ def validate_member_values_for_update(
         identifier_val = normalize_identifier(str(val))
 
     return updated, identifier_val
+
+
+def validate_answers_for_update(
+    fields: Sequence[FieldLike],
+    current_values: dict[str, Any],
+    new_values: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate partial update of poll answers.
+
+    Only keys sent change; blank resets to field default or removes if no default.
+    Unknown keys and invalid values raise PollValidationError with row-level details (field=name).
+    """
+    field_map = {f.key: f for f in fields}
+
+    # 1. Unknown keys check
+    for k in new_values:
+        if k not in field_map:
+            raise PollValidationError(
+                f"Unknown field key: '{k}'.",
+                details=[{"field": k, "message": f"Unknown field key: '{k}'."}],
+            )
+
+    updated = {**current_values}
+
+    for k, val in new_values.items():
+        field = field_map[k]
+        if is_blank(val):
+            if field.default_value is not None:
+                updated[k] = parse_default_value(
+                    field.field_type, field.default_value, field.choices
+                )
+            else:
+                updated.pop(k, None)
+        else:
+            try:
+                canonical = validate_and_canonicalize_value(
+                    field.field_type, val, field.choices, field_name=field.name
+                )
+                updated[k] = canonical
+            except PollValidationError as exc:
+                raise PollValidationError(
+                    exc.message,
+                    details=[{"field": field.name, "message": exc.message}],
+                )
+
+    return updated

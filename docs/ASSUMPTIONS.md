@@ -563,6 +563,83 @@ This section documents assumptions and architectural decisions made for Part R2c
   - If the read chunk exceeds `MAX_FILE_SIZE`, it immediately raises HTTP 422 `PollValidationError("File size exceeds 5 MB limit.")` without reading any further data from the upload stream.
   - Applied to both `preview_members_import` and `import_group_members`.
 
+# Assumptions and Design Decisions (Part R3: Poll Columns, Poll-Only Fields, Answers, and Results Export)
+
+This section documents assumptions and architectural decisions made for Part R3.
+
+## 1. Database Schema & Migration (`005_poll_fields`)
+- **`poll_included_fields`**:
+  - Composite primary key `(poll_id, field_id)`.
+  - Foreign keys to `polls(id)` and `group_fields(id)` with `ondelete="CASCADE"`.
+  - `position` (integer) preserves creator's specified column order.
+  - The group's identifier field is intentionally excluded from this table and prepended dynamically when assembling poll results.
+- **`poll_fields`**:
+  - UUID primary key, `poll_id` foreign key with cascade on delete.
+  - `key` (varchar 80) generated using the same slugification strategy as group fields (`generate_field_key`), unique per poll via `(poll_id, key)`.
+  - `name` (varchar 60), `field_type` (`text`, `number`, `choice`, `link`) enforced by database check constraint.
+  - Case-insensitive name uniqueness per poll enforced via unique index `uq_poll_fields_poll_lower_name` on `(poll_id, lower(name))`.
+  - `is_required` (boolean, default false), `default_value` (text nullable), `choices` (JSONB list nullable), `position` (integer), `created_at` (timestamptz).
+- **`poll_answers`**:
+  - UUID primary key, `poll_id` (FK, cascade), `member_id` (FK, cascade), unique constraint on `(poll_id, member_id)`.
+  - `values` (JSONB not null default `{}`). When updated, assigned as a new Python dictionary rather than mutated in place so SQLAlchemy reliably tracks dirty status.
+  - `updated_at` (timestamptz).
+- **Migration & Reversibility**: Full reversible downgrade drops all three tables, foreign keys, and indexes in correct dependency order. Tested and verified on clean database upgrade/downgrade/upgrade cycles.
+
+## 2. Reusable Field Validation (`fields.py`)
+- **Structural Subtyping via Protocol**:
+  - Extracted `FieldLike` Protocol requiring `name`, `field_type`, `choices`, `default_value`, and `is_required`.
+  - Both `GroupField` and `PollField` models conform to `FieldLike`.
+  - `validate_field_definition` centralizes validation of field types, name lengths, choice limits (2..50 unique options), and default values.
+  - `validate_field_value` validates individual member values/answers against any `FieldLike` instance.
+  - `validate_answers_for_update` handles partial answer submissions: raises 422 with row-level `{field, message}` in `details` for unknown keys or invalid values, resets blank values to field defaults, and cleans up empty entries if no default exists.
+
+## 3. Poll Creation Rules
+- **Included Fields**:
+  - Field IDs must belong to the poll's group (foreign group field IDs rejected with HTTP 422).
+  - Duplicate field IDs in creation payload are deduplicated while preserving order of first appearance.
+  - The group's identifier field is automatically excluded from `poll_included_fields` if supplied in `included_field_ids`.
+  - Included group fields and poll-only fields cannot be added or modified after creation.
+- **Poll-Only Fields**:
+  - Limited to a maximum of 15 poll fields per poll (HTTP 422 if exceeded).
+  - Field names cannot conflict (case-insensitively) with other poll fields, included group fields, or the group's identifier field to prevent ambiguous export columns.
+  - Reuses the shared validation rules from `fields.py`.
+
+## 4. Member Answers & Concurrency Safety
+- **Updating & Defaults**:
+  - `PUT /api/v1/polls/{id}/answers` accepts `{values: {key: value}}` from active, approved group members.
+  - Partial updates: only provided keys are modified; omitted keys are retained unchanged.
+  - Blank values (`""`, `None`, or whitespace-only strings) reset the answer to the field's `default_value` (if defined) or remove the key from the dictionary.
+  - Field defaults are never populated retroactively for members who have never submitted answers.
+- **Concurrency & State Safety**:
+  - Matches the race safety mechanism of `cast_vote`: executes `select(Poll).where(Poll.id == poll_id).with_for_update().execution_options(populate_existing=True)` before checking `poll.status`.
+  - If the poll is closed concurrently, answer submission is immediately rejected with HTTP 409 `poll_closed`.
+- **Answers Completeness**:
+  - `answers_complete` boolean is evaluated dynamically per member: `True` if every required poll field has a non-blank saved answer.
+  - If a poll has no required fields, members who never submitted answers are considered `answers_complete: True`. If any field is required, members who have never saved answers are `answers_complete: False`.
+  - Required poll fields do not block voting, preserving independent voting and questionnaire workflows.
+
+## 5. Visibility & Isolation
+- **Public Poll Endpoint (`GET /api/v1/polls/{id}`)**: Returns `poll_fields` (key, name, field_type, is_required, default_value, choices, position) to inform voters. Included group fields are creator-side data and are never exposed here.
+- **Member Self Endpoint (`GET /api/v1/polls/{id}/me`)**: Returns the member's own answers and `answers_updated_at`. No group field data or other members' answers are disclosed.
+- **Results Endpoint (`GET /api/v1/polls/{id}/results`)**: Creator/admin only (`X-Admin-Token` required; cross-group access returns 403 `forbidden`).
+
+## 6. Results Assembly & Export
+- **Dynamic Results Table**:
+  - Group field values are read live from `member.field_values`. If an included group field is subsequently deleted from the group, it cleanly disappears from results without breaking the poll.
+  - Columns order: Member Name, Identifier (if group has one), Included group fields in creation position order, Poll-only fields in creation position order, Status, Selected options, Late, Completed at, Answers complete.
+  - Only active members (`member.is_active is True`) are included in rows.
+  - Status matches the voting service categorization (`at_target`, `behind_target`, `excused`, `not_voted`).
+  - Lateness is calculated according to the poll's deadline and completion time.
+- **Formula Injection Mitigation**:
+  - In both CSV and Excel exports, text cells beginning with `=`, `+`, `-`, or `@` (after stripping whitespace) are prefixed with a single quote (`'`) to disable spreadsheet formula execution.
+  - Numeric values are preserved as genuine numeric cells (`float` / `int`) in Excel rather than strings.
+- **Format Delivery**:
+  - `format=json`: Comprehensive structured response.
+  - `format=csv`: Encoded with UTF-8 BOM (`\xef\xbb\xbf`) for seamless compatibility with Microsoft Excel, downloaded as attachment.
+  - `format=xlsx`: Generated via `openpyxl`, text cells explicitly typed as string cells (`data_type="s"`), downloaded as attachment.
+  - Safe attachment filenames generated by stripping non-alphanumeric characters.
+
+
 
 
 
