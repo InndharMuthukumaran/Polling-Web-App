@@ -65,6 +65,7 @@ def get_group(
         name=group.name,
         join_code=group.join_code,
         require_claim_approval=group.require_claim_approval,
+        allow_name_list=group.allow_name_list,
         fields=[GroupFieldResponse.model_validate(f) for f in fields],
         members=[MemberSummary.model_validate(m) for m in members],
     )
@@ -77,7 +78,14 @@ def update_settings(
     session: Session = Depends(get_db),
 ) -> GroupSummaryResponse:
     """Update group settings (admin only)."""
-    updated_group = update_group_settings(session, group.id, payload.require_claim_approval)
+    if payload.require_claim_approval is None and payload.allow_name_list is None:
+        raise PollValidationError("At least one of 'require_claim_approval' or 'allow_name_list' must be provided.")
+    updated_group = update_group_settings(
+        session,
+        group.id,
+        require_claim_approval=payload.require_claim_approval,
+        allow_name_list=payload.allow_name_list,
+    )
     return GroupSummaryResponse.model_validate(updated_group)
 
 

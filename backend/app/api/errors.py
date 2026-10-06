@@ -22,6 +22,7 @@ from app.errors import (
     PollingAppError,
     PollNotFoundError,
     PollValidationError,
+    RateLimitError,
 )
 
 
@@ -116,6 +117,14 @@ def register_error_handlers(app: FastAPI) -> None:
     async def option_poll_mismatch_handler(request: Request, exc: OptionPollMismatchError):
         return create_error_response(422, "validation_error", str(exc))
 
+    @app.exception_handler(RateLimitError)
+    async def rate_limit_handler(request: Request, exc: RateLimitError):
+        return create_error_response(
+            429,
+            "rate_limited",
+            str(exc) or "Too many attempts. Please wait a minute and try again.",
+        )
+
     @app.exception_handler(IntegrityError)
     async def integrity_error_handler(request: Request, exc: IntegrityError):
         # Never leak database error details; return 409 conflict
@@ -128,6 +137,7 @@ def register_error_handlers(app: FastAPI) -> None:
             403: "forbidden",
             404: "not_found",
             409: "conflict",
+            429: "rate_limited",
         }
         code = code_map.get(exc.status_code, "http_error")
         detail = str(exc.detail) if exc.detail else "An HTTP error occurred."

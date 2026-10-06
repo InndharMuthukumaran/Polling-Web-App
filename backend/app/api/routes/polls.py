@@ -27,7 +27,7 @@ from app.api.schemas import (
     VoteResponse,
 )
 from app.errors import GroupNotFoundError, PollNotFoundError
-from app.models import Group, Member, Poll, Vote
+from app.models import Group, GroupField, Member, Poll, Vote
 from app.services.polls import (
     all_reached,
     cast_vote,
@@ -131,10 +131,24 @@ def get_poll_status_view(
     target: tuple[Poll, Group] = Depends(require_admin_for_poll),
     session: Session = Depends(get_db),
 ) -> PollStatusResponse:
-    """Return full status categorization, counts, and completion times (admin only)."""
-    poll, _ = target
+    """Return full status categorization, counts, completion times, and identifiers (admin only)."""
+    poll, group = target
     status_result = get_poll_status(session, poll.id)
     is_all_reached = all_reached(session, poll.id)
+
+    id_field = session.scalar(
+        select(GroupField).where(
+            GroupField.group_id == group.id,
+            GroupField.is_identifier.is_(True),
+        )
+    )
+    id_key = id_field.key if id_field is not None else None
+
+    def _get_id(m: Member) -> str | None:
+        if not id_key or not m.field_values:
+            return None
+        val = m.field_values.get(id_key)
+        return str(val) if val is not None else None
 
     total_active = (
         len(status_result.at_target)
@@ -166,19 +180,32 @@ def get_poll_status_view(
                 display_name=item.member.display_name,
                 completed_at=item.completed_at,
                 late=item.late,
+                identifier=_get_id(item.member),
             )
             for item in status_result.at_target
         ],
         excused=[
-            MemberBasicStatusSchema(member_id=m.id, display_name=m.display_name)
+            MemberBasicStatusSchema(
+                member_id=m.id,
+                display_name=m.display_name,
+                identifier=_get_id(m),
+            )
             for m in status_result.excused
         ],
         behind_target=[
-            MemberBasicStatusSchema(member_id=m.id, display_name=m.display_name)
+            MemberBasicStatusSchema(
+                member_id=m.id,
+                display_name=m.display_name,
+                identifier=_get_id(m),
+            )
             for m in status_result.behind_target
         ],
         not_voted=[
-            MemberBasicStatusSchema(member_id=m.id, display_name=m.display_name)
+            MemberBasicStatusSchema(
+                member_id=m.id,
+                display_name=m.display_name,
+                identifier=_get_id(m),
+            )
             for m in status_result.not_voted
         ],
     )
@@ -191,6 +218,20 @@ def get_poll_history_view(
 ) -> list[MemberHistoryResponse]:
     """Return history of all active members who have interacted with this poll (admin only)."""
     poll, group = target
+
+    id_field = session.scalar(
+        select(GroupField).where(
+            GroupField.group_id == group.id,
+            GroupField.is_identifier.is_(True),
+        )
+    )
+    id_key = id_field.key if id_field is not None else None
+
+    def _get_id(m: Member) -> str | None:
+        if not id_key or not m.field_values:
+            return None
+        val = m.field_values.get(id_key)
+        return str(val) if val is not None else None
 
     active_members = session.scalars(
         select(Member)
@@ -206,6 +247,7 @@ def get_poll_history_view(
                 MemberHistoryResponse(
                     member_id=m.id,
                     display_name=m.display_name,
+                    identifier=_get_id(m),
                     history=[MemberPollHistoryItem.model_validate(h) for h in hist],
                 )
             )

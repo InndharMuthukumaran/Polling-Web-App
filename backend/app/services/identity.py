@@ -1,6 +1,7 @@
 """Identity service layer implementing group creation, admin/member tokens, and claim management."""
 
 from datetime import datetime, timezone
+from typing import Any
 import uuid
 
 from sqlalchemy import select
@@ -107,7 +108,8 @@ def authenticate_admin(
 def update_group_settings(
     session: Session,
     group_id: uuid.UUID | str,
-    require_claim_approval: bool,
+    require_claim_approval: bool | None = None,
+    allow_name_list: bool | None = None,
 ) -> Group:
     """Update settings for a group."""
     gid = resolve_uuid(group_id)
@@ -115,7 +117,11 @@ def update_group_settings(
     if not group:
         raise GroupNotFoundError(f"Group {gid} not found.")
 
-    group.require_claim_approval = bool(require_claim_approval)
+    if require_claim_approval is not None:
+        group.require_claim_approval = bool(require_claim_approval)
+    if allow_name_list is not None:
+        group.allow_name_list = bool(allow_name_list)
+
     session.commit()
     session.refresh(group)
     return group
@@ -569,4 +575,70 @@ def release_own_claim(
     Reuses reset_claim logic so votes and history are untouched.
     """
     return reset_claim(session, member.group_id, member.id)
+
+
+def mask_identifier(val: str | None) -> str | None:
+    """Mask an identifier for public display.
+
+    Shows only the last 3 characters prefixed by '•••' for values longer than 3
+    characters (e.g. '•••001'). Values of 3 or fewer characters are fully masked
+    with '•' so that the full identifier is never exposed on a public endpoint.
+    """
+    if val is None:
+        return None
+    val_str = str(val)
+    if not val_str:
+        return ""
+    if len(val_str) > 3:
+        return f"•••{val_str[-3:]}"
+    return "•" * len(val_str)
+
+
+def lookup_member_by_identifier(
+    session: Session,
+    join_code: str,
+    identifier: str,
+) -> Member:
+    """Lookup an active member by identifier within a group.
+
+    Normalizes input using the same logic as R1a (trim, collapse whitespace, casefold).
+    If the group has no identifier field, or there is no match, or the member is inactive,
+    or the join code is invalid, raises MemberNotFoundError with a generic message.
+    """
+    if not join_code or not isinstance(join_code, str) or not join_code.strip():
+        raise MemberNotFoundError("No member matches that identifier.")
+
+    group = session.scalar(
+        select(Group).where(Group.join_code == join_code.strip())
+    )
+    if not group:
+        raise MemberNotFoundError("No member matches that identifier.")
+
+    id_field = session.scalar(
+        select(GroupField).where(
+            GroupField.group_id == group.id,
+            GroupField.is_identifier.is_(True),
+        )
+    )
+    if not id_field:
+        raise MemberNotFoundError("No member matches that identifier.")
+
+    if not identifier or not isinstance(identifier, str):
+        raise MemberNotFoundError("No member matches that identifier.")
+
+    normalized = normalize_identifier(identifier)
+    if not normalized:
+        raise MemberNotFoundError("No member matches that identifier.")
+
+    member = session.scalar(
+        select(Member).where(
+            Member.group_id == group.id,
+            Member.identifier_value == normalized,
+            Member.is_active.is_(True),
+        )
+    )
+    if not member:
+        raise MemberNotFoundError("No member matches that identifier.")
+
+    return member
 

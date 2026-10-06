@@ -73,7 +73,8 @@ class GroupCreatedResponse(BaseModel):
 
 
 class GroupSettingsUpdate(BaseModel):
-    require_claim_approval: bool
+    require_claim_approval: bool | None = None
+    allow_name_list: bool | None = None
 
 
 class MemberSummary(BaseModel):
@@ -92,6 +93,7 @@ class GroupDetailResponse(BaseModel):
     name: str
     join_code: str
     require_claim_approval: bool
+    allow_name_list: bool = False
     fields: list[GroupFieldResponse] = Field(default_factory=list)
     members: list[MemberSummary]
 
@@ -103,6 +105,7 @@ class GroupSummaryResponse(BaseModel):
     name: str
     join_code: str
     require_claim_approval: bool
+    allow_name_list: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -133,12 +136,26 @@ class JoinMemberSummary(BaseModel):
     id: UUID
     display_name: str
     taken: bool
+    identifier_hint: str | None = None
 
 
 class JoinGroupResponse(BaseModel):
     group_id: UUID
     group_name: str
+    claim_mode: str
+    identifier_label: str | None = None
+    allow_name_list: bool = False
     members: list[JoinMemberSummary]
+
+
+class MemberLookupRequest(BaseModel):
+    identifier: str
+
+
+class MemberLookupResponse(BaseModel):
+    member_id: UUID
+    display_name: str | None = None
+    taken: bool
 
 
 class MemberClaimRequest(BaseModel):
@@ -300,11 +317,13 @@ class MemberTargetStatusSchema(BaseModel):
     display_name: str
     completed_at: datetime
     late: bool
+    identifier: str | None = None
 
 
 class MemberBasicStatusSchema(BaseModel):
     member_id: UUID
     display_name: str
+    identifier: str | None = None
 
 
 class PollStatusResponse(BaseModel):
@@ -320,4 +339,5 @@ class PollStatusResponse(BaseModel):
 class MemberHistoryResponse(BaseModel):
     member_id: UUID
     display_name: str
+    identifier: str | None = None
     history: list[MemberPollHistoryItem]

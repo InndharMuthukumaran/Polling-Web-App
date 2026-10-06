@@ -67,6 +67,9 @@ class Group(Base):
     require_claim_approval: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
     )
+    allow_name_list: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(
         UTCDateTime, default=utc_now, nullable=False
     )

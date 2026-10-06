@@ -405,6 +405,57 @@ This section documents assumptions and architectural decisions made for Part R1a
 - `GET /api/v1/groups/{group_id}`: Adds `fields` list, and adds member `values` object and `identifier` (original text or null).
 
 
+# Assumptions and Design Decisions (Part R1b: Claim by Identifier, Name-List Setting, Identifier in Results)
+
+This section documents the assumptions, choices, and architectural decisions made for Part R1b.
+
+## 1. Database & Schema Migration
+- **Column**: Added `allow_name_list` (`Boolean`, non-null, default `False`, server default `sa.false()`) to the `groups` table in Alembic migration `004_claim_settings`.
+- **Downgrade**: Downgrade drops `allow_name_list` from `groups`. Verified via `test_migration_004_claim_settings_cycle`.
+
+## 2. Derived Claim Mode & Public Join Endpoint
+- **Claim Mode**: Derived dynamically from whether the group has a field marked `is_identifier=True`.
+  - If an identifier field exists, `claim_mode = "identifier"` and `identifier_label` contains the identifier field's name.
+  - If no identifier field exists, `claim_mode = "list"` and `identifier_label = None`. Groups without an identifier behave identically to prior versions.
+- **Public Member List Visibility**:
+  - In `list` mode, or when `allow_name_list` is `True`, active members are returned in `members`.
+  - In `identifier` mode with `allow_name_list: False`, `members` is an empty list `[]`.
+- **Identifier Hint Masking**:
+  - When member names are returned for an identifier-mode group with `allow_name_list: True`, each item includes `identifier_hint`.
+  - Values longer than 3 characters show only their last 3 characters prefixed by `•••` (e.g. `REG001` -> `•••001`).
+  - Values of 3 or fewer characters are fully masked (`•` * length, e.g. `ABC` -> `•••`, `42` -> `••`) so that the complete identifier is never leaked on a public endpoint.
+  - Groups without an identifier field return `identifier_hint: null`.
+
+## 3. Member Lookup Endpoint
+- `POST /api/v1/join/{join_code}/lookup` accepts `{identifier: str}` with no authentication.
+- **Normalization**: Trims leading/trailing whitespace, collapses consecutive inner whitespace characters to a single space, and applies `casefold()` (matching R1a member identifier storage).
+- **Uniform 404 Response**: If the join code does not exist, the group has no identifier field, the identifier is blank/unmatched, or the matched member is inactive (`is_active == False`), the endpoint returns a generic 404 response: `{"error": {"code": "not_found", "message": "No member matches that identifier."}}` to prevent enumeration.
+- **Claim State**:
+  - Unclaimed member: returns `{"member_id": uuid, "display_name": "Asha", "taken": false}`.
+  - Claimed member (`pending` or `approved`): returns `{"member_id": uuid, "display_name": null, "taken": true}`.
+
+## 4. Rate Limiting (`app/ratelimit.py`)
+- In-memory sliding-window limiter applied exclusively to `POST /api/v1/join/{join_code}/lookup`.
+- Keyed by client IP and group join code (`f"{client_ip}:{join_code}"`).
+- Limits lookups to at most 10 attempts per 60-second window. The 11th attempt returns HTTP 429:
+  `{"error": {"code": "rate_limited", "message": "Too many attempts. Please wait a minute and try again."}}`
+- Includes an injectable clock callable (`set_clock`) and `reset()` method to enable deterministic unit testing across time shifts.
+
+## 5. Group Settings Updates (`PATCH /api/v1/groups/{group_id}`)
+- Accepts both `require_claim_approval: bool | None` and `allow_name_list: bool | None`.
+- At least one setting must be provided. Supplying neither (e.g. `{}`) returns HTTP 422 with `validation_error`.
+- `GET /api/v1/groups/{group_id}` includes `allow_name_list` alongside `require_claim_approval`.
+
+## 6. Identifier in Creator Results
+- Every member entry in the creator's poll status response (`at_target`, `behind_target`, `excused`, `not_voted`) and history response (`GET /api/v1/polls/{poll_id}/history`) includes `identifier`: the original un-normalized text string stored in `member.field_values` (or `null` if the group lacks an identifier field).
+- Resolved once per request by querying the group's identifier field key up front, avoiding per-member database lookups.
+- Enables distinguishing members who share identical display names.
+
+## 7. Web App Forward Compatibility Note
+- Until the web app is updated in Part R5 to incorporate the identifier lookup UI, groups with an identifier field must have `allow_name_list: true` enabled for the current web app to display member names on the join page.
+
+
+
 
 
 

@@ -99,3 +99,9 @@ class ClaimNotApprovedError(PollingAppError):
 
     pass
 
+
+class RateLimitError(PollingAppError):
+    """Raised when an operation has exceeded rate limits."""
+
+    pass
+
