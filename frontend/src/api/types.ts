@@ -83,9 +83,16 @@ export interface MemberPollMeResponse {
   history: MemberPollHistoryItem[];
 }
 
+export interface ApiErrorRowDetail {
+  row?: number;
+  field?: string;
+  message: string;
+}
+
 export interface ApiErrorDetail {
   code: string;
   message: string;
+  details?: ApiErrorRowDetail[];
 }
 
 export interface ApiErrorEnvelope {
@@ -98,7 +105,42 @@ export interface StoredMemberIdentity {
   displayName: string;
 }
 
-// Creator / Admin Types (Part 3B)
+// Creator / Admin Types (Part 3B & R4)
+
+export type FieldType = 'text' | 'number' | 'choice' | 'link';
+
+export interface GroupField {
+  id: string;
+  key: string;
+  name: string;
+  field_type: FieldType;
+  is_required: boolean;
+  default_value: string | null;
+  choices: string[] | null;
+  is_identifier: boolean;
+  position: number;
+}
+
+export interface CreateFieldPayload {
+  name: string;
+  field_type: FieldType;
+  is_required?: boolean;
+  default_value?: string | null;
+  choices?: string[] | null;
+}
+
+export interface UpdateFieldPayload {
+  name?: string;
+  is_required?: boolean;
+  default_value?: string | null;
+  choices?: string[] | null;
+  is_identifier?: boolean;
+}
+
+export interface MemberInput {
+  display_name: string;
+  values?: Record<string, string | number | null>;
+}
 
 export interface CreateGroupResponse {
   group_id: string;
@@ -112,6 +154,8 @@ export interface GroupMember {
   display_name: string;
   is_active: boolean;
   claim_status: 'unclaimed' | 'pending' | 'approved';
+  values?: Record<string, string | number | null>;
+  identifier?: string | null;
 }
 
 export interface AdminGroupDetailResponse {
@@ -119,7 +163,50 @@ export interface AdminGroupDetailResponse {
   name: string;
   join_code: string;
   require_claim_approval: boolean;
+  allow_name_list?: boolean;
+  fields: GroupField[];
   members: GroupMember[];
+}
+
+export interface ColumnPreview {
+  index: number;
+  header: string;
+}
+
+export interface ImportPreviewResponse {
+  filename: string;
+  sheet: string | null;
+  columns: ColumnPreview[];
+  total_rows: number;
+  sample_rows: string[][];
+  suggested_mapping: Record<string, string>;
+}
+
+export interface ImportNewField {
+  column: number;
+  name: string;
+  field_type: FieldType;
+  choices?: string[];
+  is_required?: boolean;
+  default_value?: string | null;
+  is_identifier?: boolean;
+}
+
+export interface ImportMembersOptions {
+  file: File;
+  mapping: Record<string, string>;
+  new_fields?: ImportNewField[];
+  dry_run: boolean;
+  on_duplicate: 'reject' | 'skip';
+}
+
+export interface ImportResultResponse {
+  dry_run: boolean;
+  rows_total: number;
+  rows_added: number;
+  rows_skipped: number;
+  fields_created: string[];
+  errors: ApiErrorRowDetail[];
 }
 
 export interface AdminPollListItem {

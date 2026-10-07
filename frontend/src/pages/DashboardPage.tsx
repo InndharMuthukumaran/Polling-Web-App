@@ -6,19 +6,15 @@ import { Banner } from '../components/Banner';
 import { Spinner } from '../components/Spinner';
 import { Badge } from '../components/Badge';
 import {
-  addMembers,
-  approveMemberClaim,
   getGroup,
   getGroupPolls,
-  resetMemberClaim,
   updateGroup,
-  updateMember,
 } from '../api/endpoints';
 import { ApiError, getFriendlyErrorMessage } from '../api/client';
 import { clearAdmin, getAdmin, saveAdmin } from '../lib/adminStorage';
 import { copyToClipboard } from '../lib/messages';
 import { describeDeadline } from '../lib/time';
-import type { AdminGroupDetailResponse, AdminPollListItem, GroupMember } from '../api/types';
+import type { AdminGroupDetailResponse, AdminPollListItem } from '../api/types';
 
 export const DashboardPage: React.FC = () => {
   const { groupId } = useParams<{ groupId: string }>();
@@ -39,17 +35,7 @@ export const DashboardPage: React.FC = () => {
   // Actions state
   const [copiedLink, setCopiedLink] = useState(false);
   const [isUpdatingApproval, setIsUpdatingApproval] = useState(false);
-
-  // Add members state
-  const [newMembersText, setNewMembersText] = useState('');
-  const [isAddingMembers, setIsAddingMembers] = useState(false);
-  const [addMembersError, setAddMembersError] = useState<string | null>(null);
-
-  // Member action states
-  const [resetConfirmMemberId, setResetConfirmMemberId] = useState<string | null>(null);
-  const [renameMemberId, setRenameMemberId] = useState<string | null>(null);
-  const [renameValue, setRenameValue] = useState('');
-  const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
+  const [isUpdatingAllowNameList, setIsUpdatingAllowNameList] = useState(false);
   const [memberActionError, setMemberActionError] = useState<string | null>(null);
 
   const loadDashboard = useCallback(
@@ -147,119 +133,21 @@ export const DashboardPage: React.FC = () => {
     }
   };
 
-  const handleAddMembers = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleToggleAllowNameList = async () => {
     if (!groupId || !group) return;
     const admin = getAdmin(groupId);
     if (!admin?.adminToken) return;
 
-    const names = newMembersText
-      .split('\n')
-      .map((n) => n.trim())
-      .filter((n) => n.length > 0);
-
-    if (names.length === 0) {
-      setAddMembersError('Please enter at least one member name.');
-      return;
-    }
-
-    setIsAddingMembers(true);
-    setAddMembersError(null);
-
+    setIsUpdatingAllowNameList(true);
     try {
-      await addMembers(groupId, admin.adminToken, names);
-      setNewMembersText('');
-      // Refresh group members
-      const refreshed = await getGroup(groupId, admin.adminToken);
-      setGroup(refreshed);
-    } catch (err) {
-      setAddMembersError(getFriendlyErrorMessage(err));
-    } finally {
-      setIsAddingMembers(false);
-    }
-  };
-
-  const handleApprove = async (memberId: string) => {
-    if (!groupId) return;
-    const admin = getAdmin(groupId);
-    if (!admin?.adminToken) return;
-
-    setActionLoadingId(memberId);
-    setMemberActionError(null);
-    try {
-      await approveMemberClaim(groupId, memberId, admin.adminToken);
-      const refreshed = await getGroup(groupId, admin.adminToken);
-      setGroup(refreshed);
-    } catch (err) {
-      setMemberActionError(getFriendlyErrorMessage(err));
-    } finally {
-      setActionLoadingId(null);
-    }
-  };
-
-  const handleReset = async (memberId: string) => {
-    if (!groupId) return;
-    const admin = getAdmin(groupId);
-    if (!admin?.adminToken) return;
-
-    setActionLoadingId(memberId);
-    setMemberActionError(null);
-    try {
-      await resetMemberClaim(groupId, memberId, admin.adminToken);
-      setResetConfirmMemberId(null);
-      const refreshed = await getGroup(groupId, admin.adminToken);
-      setGroup(refreshed);
-    } catch (err) {
-      setMemberActionError(getFriendlyErrorMessage(err));
-    } finally {
-      setActionLoadingId(null);
-    }
-  };
-
-  const handleToggleActive = async (member: GroupMember) => {
-    if (!groupId) return;
-    const admin = getAdmin(groupId);
-    if (!admin?.adminToken) return;
-
-    setActionLoadingId(member.id);
-    setMemberActionError(null);
-    try {
-      await updateMember(groupId, member.id, admin.adminToken, {
-        is_active: !member.is_active,
+      const updated = await updateGroup(groupId, admin.adminToken, {
+        allow_name_list: !group.allow_name_list,
       });
-      const refreshed = await getGroup(groupId, admin.adminToken);
-      setGroup(refreshed);
+      setGroup(updated);
     } catch (err) {
       setMemberActionError(getFriendlyErrorMessage(err));
     } finally {
-      setActionLoadingId(null);
-    }
-  };
-
-  const handleSaveRename = async (memberId: string) => {
-    if (!groupId) return;
-    const admin = getAdmin(groupId);
-    if (!admin?.adminToken) return;
-    const trimmed = renameValue.trim();
-    if (!trimmed) {
-      setMemberActionError('Display name cannot be blank.');
-      return;
-    }
-
-    setActionLoadingId(memberId);
-    setMemberActionError(null);
-    try {
-      await updateMember(groupId, memberId, admin.adminToken, {
-        display_name: trimmed,
-      });
-      setRenameMemberId(null);
-      setRenameValue('');
-      const refreshed = await getGroup(groupId, admin.adminToken);
-      setGroup(refreshed);
-    } catch (err) {
-      setMemberActionError(getFriendlyErrorMessage(err));
-    } finally {
-      setActionLoadingId(null);
+      setIsUpdatingAllowNameList(false);
     }
   };
 
@@ -349,6 +237,12 @@ export const DashboardPage: React.FC = () => {
     );
   }
 
+  const waitingApprovalCount = (group.members || []).filter(
+    (m) => m.is_active && m.claim_status === 'pending',
+  ).length;
+
+  const identifierField = (group.fields || []).find((f) => f.is_identifier);
+
   return (
     <div className="min-h-screen py-8 px-4 flex flex-col items-center">
       <div className="w-full max-w-md space-y-6">
@@ -401,7 +295,7 @@ export const DashboardPage: React.FC = () => {
             </div>
           </div>
 
-          <div className="pt-2 border-t border-neutral-100">
+          <div className="pt-2 border-t border-neutral-100 space-y-3">
             <label className="flex items-start gap-3 cursor-pointer select-none">
               <input
                 type="checkbox"
@@ -419,203 +313,67 @@ export const DashboardPage: React.FC = () => {
                 </span>
               </div>
             </label>
+
+            <label className="flex items-start gap-3 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={Boolean(group.allow_name_list)}
+                disabled={isUpdatingAllowNameList}
+                onChange={handleToggleAllowNameList}
+                className="mt-1 w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 border-neutral-300"
+              />
+              <div>
+                <span className="text-sm font-medium text-neutral-900 block">
+                  Show the list of names on the join page
+                </span>
+                <span className="text-xs text-neutral-500 block">
+                  When your group has an identifier field, members claim their name by typing it, and this list is hidden. Turn this on only for small, friendly groups.
+                </span>
+              </div>
+            </label>
+
+            {identifierField && (
+              <p className="text-xs text-neutral-600 bg-neutral-50 border border-neutral-200 p-2.5 rounded-xl">
+                {`Members claim their name by entering their ${identifierField.name}.`}
+              </p>
+            )}
           </div>
         </Card>
 
-        {/* CARD 2: Members Card */}
+        {/* CARD 2: Roster Card */}
         <Card className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-base font-bold text-neutral-900">
-              Members ({group.members.length})
-            </h2>
-          </div>
+          <div className="flex items-start justify-between gap-3">
+            <div className="space-y-1">
+              <h2 className="text-base font-bold text-neutral-900">Roster</h2>
+              <div className="flex items-center gap-3 text-sm text-neutral-600 flex-wrap">
+                <span>
+                  <strong className="font-semibold text-neutral-900">
+                    {`${group.members?.length || 0} ${group.members?.length === 1 ? 'member' : 'members'}`}
+                  </strong>
+                </span>
+                <span className="text-neutral-300">&bull;</span>
+                <span>
+                  <strong className="font-semibold text-neutral-900">
+                    {`${group.fields?.length || 0} ${(group.fields?.length || 0) === 1 ? 'field' : 'fields'}`}
+                  </strong>
+                </span>
+              </div>
+            </div>
 
-          {/* Members List */}
-          <div className="space-y-2">
-            {group.members.length === 0 ? (
-              <p className="text-sm text-neutral-500 text-center py-3">
-                No members added yet. Add member names below.
-              </p>
-            ) : (
-              group.members.map((member) => {
-                const isResetting = resetConfirmMemberId === member.id;
-                const isRenaming = renameMemberId === member.id;
-                const isLoading = actionLoadingId === member.id;
-
-                let statusBadge = (
-                  <Badge status="not_claimed" label="Not claimed" />
-                );
-                if (!member.is_active) {
-                  statusBadge = <Badge status="inactive" label="Inactive" />;
-                } else if (member.claim_status === 'pending') {
-                  statusBadge = <Badge status="waiting" label="Waiting for approval" />;
-                } else if (member.claim_status === 'approved') {
-                  statusBadge = <Badge status="claimed" label="Claimed" />;
-                }
-
-                return (
-                  <div
-                    key={member.id}
-                    className="p-3.5 rounded-xl border border-neutral-200 bg-neutral-50/50 space-y-2.5"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span
-                          className={`font-semibold text-sm ${
-                            member.is_active ? 'text-neutral-900' : 'text-neutral-400 line-through'
-                          }`}
-                        >
-                          {member.display_name}
-                        </span>
-                        {statusBadge}
-                      </div>
-                    </div>
-
-                    {/* Inline Rename Form */}
-                    {isRenaming ? (
-                      <div className="flex gap-2 pt-1">
-                        <input
-                          type="text"
-                          value={renameValue}
-                          onChange={(e) => setRenameValue(e.target.value)}
-                          className="w-full text-xs px-3 py-1.5 border border-neutral-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600"
-                        />
-                        <Button
-                          size="sm"
-                          variant="primary"
-                          loading={isLoading}
-                          onClick={() => handleSaveRename(member.id)}
-                        >
-                          Save
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => {
-                            setRenameMemberId(null);
-                            setRenameValue('');
-                          }}
-                        >
-                          Cancel
-                        </Button>
-                      </div>
-                    ) : null}
-
-                    {/* Reset Confirmation Dialog */}
-                    {isResetting ? (
-                      <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl space-y-2 text-xs text-amber-950">
-                        <p>
-                          <strong>Reset claim?</strong> The next person to claim this name will keep
-                          its previous votes and history.
-                        </p>
-                        <div className="flex gap-2">
-                          <Button
-                            size="sm"
-                            variant="danger"
-                            loading={isLoading}
-                            onClick={() => handleReset(member.id)}
-                          >
-                            Confirm Reset
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => setResetConfirmMemberId(null)}
-                          >
-                            Cancel
-                          </Button>
-                        </div>
-                      </div>
-                    ) : null}
-
-                    {/* Action Buttons Row */}
-                    {!isRenaming && !isResetting && (
-                      <div className="flex items-center gap-2 pt-1 flex-wrap">
-                        {/* Approve: only for waiting/pending */}
-                        {member.is_active && member.claim_status === 'pending' && (
-                          <Button
-                            size="sm"
-                            variant="primary"
-                            loading={isLoading}
-                            onClick={() => handleApprove(member.id)}
-                          >
-                            Approve
-                          </Button>
-                        )}
-
-                        {/* Reset: only for waiting or claimed */}
-                        {(member.claim_status === 'pending' ||
-                          member.claim_status === 'approved') && (
-                          <Button
-                            size="sm"
-                            variant="secondary"
-                            disabled={isLoading}
-                            onClick={() => setResetConfirmMemberId(member.id)}
-                          >
-                            Reset
-                          </Button>
-                        )}
-
-                        {/* Rename */}
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          disabled={isLoading}
-                          onClick={() => {
-                            setRenameMemberId(member.id);
-                            setRenameValue(member.display_name);
-                          }}
-                        >
-                          Rename
-                        </Button>
-
-                        {/* Deactivate or Reactivate */}
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          disabled={isLoading}
-                          onClick={() => handleToggleActive(member)}
-                        >
-                          {member.is_active ? 'Deactivate' : 'Reactivate'}
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })
+            {waitingApprovalCount > 0 && (
+              <Badge
+                status="waiting"
+                label={`${waitingApprovalCount} waiting for approval`}
+              />
             )}
           </div>
 
-          {/* Add Members Section */}
-          <div className="pt-3 border-t border-neutral-100 space-y-3">
-            <div className="space-y-1">
-              <label
-                htmlFor="add-members-textarea"
-                className="block text-xs font-semibold text-neutral-700"
-              >
-                Add members
-              </label>
-              <p className="text-xs text-neutral-500">
-                Enter names one per line. Blank lines are ignored.
-              </p>
-            </div>
-
-            {addMembersError && <Banner type="error">{addMembersError}</Banner>}
-
-            <form onSubmit={handleAddMembers} className="space-y-2">
-              <textarea
-                id="add-members-textarea"
-                rows={3}
-                placeholder="Alice Cooper&#10;Bob Smith&#10;Charlie Brown"
-                value={newMembersText}
-                onChange={(e) => setNewMembersText(e.target.value)}
-                className="w-full px-3 py-2 text-sm rounded-xl border border-neutral-300 focus:outline-none focus:ring-2 focus:ring-indigo-600"
-              />
-              <Button type="submit" variant="secondary" size="md" fullWidth loading={isAddingMembers}>
-                Add Members
-              </Button>
-            </form>
-          </div>
+          <Link
+            to={`/g/${groupId}/roster`}
+            className="w-full inline-flex items-center justify-center font-medium rounded-xl transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600 bg-neutral-100 text-neutral-800 hover:bg-neutral-200 text-sm px-4 py-2.5 min-h-[44px]"
+          >
+            Manage roster
+          </Link>
         </Card>
 
         {/* CARD 3: Polls Card */}

@@ -119,4 +119,132 @@ describe('client.ts', () => {
     expect(getFriendlyErrorMessage(new ApiError(0, 'network_error', ''))).toContain('internet');
     expect(getFriendlyErrorMessage(new Error('Generic failure'))).toBe('Generic failure');
   });
+
+  it('multipart upload does not set Content-Type and includes the right fields', async () => {
+    let capturedHeaders: Headers | undefined;
+    let capturedBody: unknown;
+
+    const mockFetch = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+      capturedHeaders = init.headers as Headers;
+      capturedBody = init.body;
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          filename: 'test.xlsx',
+          columns: [{ index: 0, header: 'Name' }],
+          total_rows: 1,
+          sample_rows: [['Alice']],
+          suggested_mapping: { '0': 'name' },
+        }),
+      });
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const file = new File(['dummy content'], 'test.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const { previewMemberImport } = await import('./endpoints');
+    await previewMemberImport('grp-1', 'admin-tok-123', file);
+
+    expect(capturedHeaders).toBeDefined();
+    expect(capturedHeaders?.get('X-Admin-Token')).toBe('admin-tok-123');
+    // Important: Content-Type must NOT be set manually so browser sets multipart boundary
+    expect(capturedHeaders?.get('Content-Type')).toBeNull();
+    expect(capturedBody).toBeInstanceOf(FormData);
+    const formData = capturedBody as FormData;
+    expect(formData.get('file')).toBe(file);
+  });
+
+  it('template download returns a blob and uses the admin header', async () => {
+    let capturedHeaders: Headers | undefined;
+
+    const dummyBlob = new Blob(['col1,col2'], { type: 'text/csv' });
+    const mockFetch = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+      capturedHeaders = init.headers as Headers;
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Headers({
+          'content-disposition': 'attachment; filename="members_template.csv"',
+        }),
+        blob: async () => dummyBlob,
+      });
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const { downloadMemberTemplate } = await import('./endpoints');
+    const result = await downloadMemberTemplate('grp-1', 'admin-tok-123', 'csv');
+
+    expect(capturedHeaders?.get('X-Admin-Token')).toBe('admin-tok-123');
+    expect(result).toBeInstanceOf(Blob);
+    expect(result.filename).toBe('members_template.csv');
+  });
+
+  it('details from a 422 reach the caller in ApiError', async () => {
+    const errorBody = {
+      error: {
+        code: 'validation_error',
+        message: 'Some rows failed validation',
+        details: [
+          { row: 2, field: 'StudentID', message: 'Value must be unique' },
+          { row: 5, field: 'Email', message: 'Invalid format' },
+        ],
+      },
+    };
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 422,
+      statusText: 'Unprocessable Entity',
+      json: async () => errorBody,
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    try {
+      await request('/api/v1/groups/grp-1/members/import', { method: 'POST', adminToken: 'tok' });
+      expect.fail('Should have thrown ApiError');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ApiError);
+      const apiErr = err as ApiError;
+      expect(apiErr.status).toBe(422);
+      expect(apiErr.code).toBe('validation_error');
+      expect(apiErr.message).toBe('Some rows failed validation');
+      expect(apiErr.details).toHaveLength(2);
+      expect(apiErr.details?.[0]).toEqual({
+        row: 2,
+        field: 'StudentID',
+        message: 'Value must be unique',
+      });
+    }
+  });
+
+  it('clearing a default sends default_value as empty string', async () => {
+    let capturedBody: string | undefined;
+
+    const mockFetch = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+      capturedBody = init.body as string;
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'f-1',
+          key: 'notes',
+          name: 'Notes',
+          field_type: 'text',
+          is_required: false,
+          default_value: null,
+          choices: null,
+          is_identifier: false,
+          position: 1,
+        }),
+      });
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const { updateField } = await import('./endpoints');
+    await updateField('grp-1', 'f-1', 'tok-123', { default_value: '' });
+
+    expect(capturedBody).toBeDefined();
+    const parsed = JSON.parse(capturedBody!);
+    expect(parsed.default_value).toBe('');
+  });
 });
+

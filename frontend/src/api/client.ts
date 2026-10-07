@@ -1,14 +1,16 @@
-import type { ApiErrorEnvelope } from './types';
+import type { ApiErrorEnvelope, ApiErrorRowDetail } from './types';
 
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
+  readonly details?: ApiErrorRowDetail[];
 
-  constructor(status: number, code: string, message: string) {
+  constructor(status: number, code: string, message: string, details?: ApiErrorRowDetail[]) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -16,6 +18,7 @@ export interface RequestOptions extends Omit<RequestInit, 'body'> {
   body?: unknown;
   token?: string;
   adminToken?: string;
+  responseType?: 'json' | 'blob';
 }
 
 export const API_BASE_URL: string =
@@ -26,7 +29,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
   const url = `${API_BASE_URL}${normalizedPath}`;
 
-  const { body, token, adminToken, headers: customHeaders, ...restOptions } = options;
+  const { body, token, adminToken, responseType = 'json', headers: customHeaders, ...restOptions } = options;
 
   const headers = new Headers(customHeaders);
 
@@ -44,8 +47,13 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   };
 
   if (body !== undefined) {
-    headers.set('Content-Type', 'application/json');
-    fetchOptions.body = JSON.stringify(body);
+    if (typeof FormData !== 'undefined' && body instanceof FormData) {
+      // Browser sets multipart/form-data with boundary automatically
+      fetchOptions.body = body;
+    } else {
+      headers.set('Content-Type', 'application/json');
+      fetchOptions.body = JSON.stringify(body);
+    }
   }
 
   let response: Response;
@@ -62,22 +70,38 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   if (!response.ok) {
     let code = 'unknown_error';
     let message = `Request failed with status ${response.status}`;
+    let details: ApiErrorRowDetail[] | undefined = undefined;
 
     try {
       const data = (await response.json()) as ApiErrorEnvelope;
       if (data && typeof data === 'object' && data.error) {
         code = data.error.code || code;
         message = data.error.message || message;
+        details = data.error.details;
       }
     } catch {
       message = response.statusText || message;
     }
 
-    throw new ApiError(response.status, code, message);
+    throw new ApiError(response.status, code, message, details);
   }
 
   if (response.status === 204) {
     return undefined as unknown as T;
+  }
+
+  if (responseType === 'blob') {
+    const blob = await response.blob();
+    const disposition = response.headers.get('content-disposition');
+    let filename = '';
+    if (disposition) {
+      const match = /filename\*?=['"]?(?:UTF-\d['"]*)?([^;\r\n"']*)['"]?/i.exec(disposition);
+      if (match && match[1]) {
+        filename = decodeURIComponent(match[1]);
+      }
+    }
+    Object.assign(blob, { filename, blob });
+    return blob as unknown as T;
   }
 
   try {

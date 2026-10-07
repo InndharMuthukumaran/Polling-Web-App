@@ -560,12 +560,13 @@ export const PollPage: React.FC = () => {
             )}
 
             {/* Member Identity Chip */}
-            <div className="flex items-center justify-between text-xs px-2 text-neutral-500">
-              <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center justify-between text-xs px-2 text-neutral-500 max-[480px]:flex-col max-[480px]:items-start max-[480px]:gap-2">
+              <div className="flex items-center gap-2 flex-wrap max-[480px]:w-full">
                 <span>
                   Voting as <strong className="text-neutral-800">{identity.displayName}</strong>
                 </span>
                 <SwitchNameAction
+                  className="max-[480px]:w-full"
                   displayName={identity.displayName}
                   memberToken={identity.memberToken}
                   joinCode={poll.join_code}

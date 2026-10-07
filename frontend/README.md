@@ -102,9 +102,14 @@ npm run preview
   - Member helper line: "Have a poll link? Just open it."
 - **`/g/:groupId` (DashboardPage)**:
   - Share card: Join link with copy button, and toggle for "Require my approval before a member can vote".
-  - Members card: roster with status badges (Not claimed, Waiting for approval, Claimed, Inactive), actions to Approve, Reset (with confirmation prompt), Rename (inline), Deactivate/Reactivate, and "Add members" textarea.
+  - Roster card: compact summary showing member count, waiting-for-approval badge, custom field count, button to open Roster page, toggle for "Show the list of names on the join page" (`allow_name_list`), and an identifier hint line when an identifier field exists.
   - Polls card: list of polls with Open/Closed badges and deadlines, plus "New poll" button.
   - Automatic reconnection screen when creator token is missing or rejected (401/403).
+- **`/g/:groupId/roster` (RosterPage - Part R4)**:
+  - Tabbed interface (`Fields`, `Members`, `Import`).
+  - **Fields Tab**: Create and edit custom group fields (`text`, `number`, `choice`, `link`), configure choices and defaults, mark/unmark unique identifier field (with offending member reports on conflict), and delete non-identifier fields with value-count confirmation warning.
+  - **Members Tab**: Search members by name or identifier, filter by status (`all`, `active`, `inactive`, `pending`, `approved`, `unclaimed`), paginate (50 per page). View in responsive desktop table or mobile cards. Quick-add names in bulk. Add/edit members with per-field inputs. Actions to Approve, Reset claim, Deactivate/Reactivate, and Edit.
+  - **Import Tab**: 4-step wizard to import members from Excel (`.xlsx`) or CSV. Download template, upload file (up to 5 MB), map columns (with new field creation from headers), perform dry-run check with row-level error reporting, and execute import with duplicate resolution (skip or reject).
 - **`/g/:groupId/polls/new` (NewPollPage)**:
   - Name, description, multiple-choice switch, local deadline input, and completion time mode radio ("last" recommended vs "first").
   - Options editor with role selection (Target, In progress, Excused, Not yet).
@@ -199,3 +204,33 @@ Open [http://localhost:5173](http://localhost:5173) in your primary browser.
 2. In the confirmation dialog, click **Confirm & Close Poll**.
 3. Verify the status updates to `Closed`.
 4. In Alice's member window, reload or tap an option; verify the poll displays `"This poll is closed"` with options frozen.
+
+### 10. Roster & Spreadsheet Import Smoke-Test (Part R4)
+1. Navigate back to the Creator Dashboard (`/g/:groupId`).
+2. Notice the **Roster** card showing member counts, custom fields count, and the **"Show the list of names on the join page"** toggle switch. Toggle it and verify the setting persists on refresh.
+3. Click **Manage Roster & Fields** to open the Roster page (`/g/:groupId/roster`).
+4. **Fields Tab**:
+   - Click **Add Field**. Enter Name `Register No`, Type `text`. Note that setting it as Identifier is disabled while members exist without identifiers. Click **Save Field**.
+   - Click **Add Field** again. Enter Name `Department`, Type `choice`, Choices: `Computer Science, Mechanical, Electrical`, Default: `Computer Science`. Click **Save Field**.
+   - Verify both fields appear in the fields list with their type badges and position order.
+5. **Members Tab**:
+   - In the Members tab, verify existing members display their custom field values (pre-filled with `Computer Science` default where applicable).
+   - Click **Edit** on `Alice Cooper`. Enter `Register No`: `REG001`. Click **Save Changes**.
+   - Click **Edit** on `Bob Smith`. Enter `Register No`: `REG002`. Click **Save Changes**.
+   - Click **Edit** on `Charlie Brown`. Enter `Register No`: `REG003`. Click **Save Changes**.
+   - Return to the **Fields Tab**, click **Edit** on `Register No`, check **"Use this field as the unique identifier"**, and click **Save Changes**. Verify the field receives the `Identifier` badge.
+6. **Import Tab (Spreadsheet Wizard)**:
+   - Go to the **Import** tab.
+   - Click **Download .xlsx Template** and open it in Excel/Sheets. Observe the columns `Name`, `Register No`, and `Department` with dropdown choices.
+   - Fill in two new rows:
+     - `Diana Prince`, `REG004`, `Mechanical`
+     - `Evan Wright`, `REG005`, `Electrical`
+   - Save the file and upload it in **Step 1: Choose File**.
+   - In **Step 2: Preview & Map**, verify `Name` mapped to `Name`, `Register No` mapped to `Register No`, and `Department` mapped to `Department`.
+   - Click **Check file (dry-run)**. Verify **Step 3** shows `2 rows ready to import` and `0 errors`.
+   - Click **Import 2 members**. Verify successful import and transition to the **Members Tab**.
+7. **Search, Filter & Member Actions**:
+   - Use the search bar to type `REG004` or `Diana`; verify instant filtering.
+   - Filter by status (`Active`, `Unclaimed`, etc.).
+   - Test member actions: click **Reset claim** on a member and verify confirmation prompt; test **Deactivate** / **Reactivate**.
+

@@ -359,7 +359,7 @@ export const JoinPage: React.FC = () => {
             )}
 
             <div className="p-4 bg-emerald-50/80 border border-emerald-200 rounded-xl space-y-2">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between max-[480px]:flex-col max-[480px]:items-start max-[480px]:gap-2">
                 <div className="flex items-center gap-2">
                   <span className="w-2 h-2 rounded-full bg-emerald-600" aria-hidden="true" />
                   <span className="text-xs font-bold uppercase tracking-wider text-emerald-800">
@@ -367,6 +367,7 @@ export const JoinPage: React.FC = () => {
                   </span>
                 </div>
                 <SwitchNameAction
+                  className="max-[480px]:w-full"
                   displayName={identity.displayName}
                   memberToken={identity.memberToken}
                   joinCode={joinCode!}

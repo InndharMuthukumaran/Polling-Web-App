@@ -53,7 +53,7 @@ export const SwitchNameAction: React.FC<SwitchNameActionProps> = ({
   };
 
   return (
-    <div className={`inline-block ${className}`.trim()}>
+    <div className={`inline-block ${showConfirm ? 'w-full max-[480px]:w-full' : ''} ${className}`.trim()}>
       {!showConfirm ? (
         <button
           type="button"
