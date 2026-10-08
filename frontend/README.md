@@ -256,4 +256,31 @@ Open [http://localhost:5173](http://localhost:5173) in your primary browser.
    - Click **Save answers**. Verify the button disables while saving, then shows `"Saved [timestamp]"`, and the reminder banner disappears.
    - When the creator closes the poll, verify the card becomes read-only with a `"This poll is closed."` notice and no Save button.
 
+### 12. Poll Fields, Identifier in Defaulters, and Results Export Smoke-Test (Part R5b)
+1. **Roster Setup**:
+   - Ensure the group has custom fields, including an identifier field (e.g. `Register No`) and an extra field (e.g. `Department`), and members with values.
+2. **Create a Poll with Columns and Questions (`NewPollPage`)**:
+   - From the Dashboard, click **New Poll**.
+   - Fill in name and options.
+   - In **"Roster columns for your results"**:
+     - Verify `Register No` is listed first, checked and locked (`disabled`), with `"Always included so you can tell people apart."`
+     - Check `Department`.
+   - In **"Questions for members (optional)"**:
+     - Click **+ Add question**. Add a question `Preferred Location` of type `Choice list`, enter choices `Bangalore\nHyderabad\nPune`, and select default `Bangalore`.
+     - Click **+ Add question** again. Add a question `Expected CTC` of type `Number`.
+     - Click **Create Poll**.
+3. **Defaulter Lists & Identifier Display (`AdminPollPage`)**:
+   - On the poll admin page, verify members in `Not voted`, `Behind target`, `Excused`, and `Done` display their identifier in muted style next to their name (e.g. `Diana Prince  REG004`).
+   - Click **Copy defaulters** and **Copy names**: paste into a notepad and verify the format is `Name (identifier)` (e.g. `Diana Prince (REG004)`), ensuring members with identical names are distinguishable.
+   - Open **Voting History** and verify identifiers appear next to names.
+4. **Vote and Answer as Member**:
+   - In a member browser window, vote on the poll and answer `Preferred Location` and `Expected CTC`. Click **Save answers**.
+5. **Results Table & File Downloads**:
+   - In the creator window, expand the **Results** section.
+   - Notice the note: `"Roster values are shown as they are right now."`
+   - Verify columns appear in order: `Name`, `Register No`, `Department`, `Preferred Location`, `Expected CTC`, `Status`, `Selected options`, `Late`, and `Answers complete`.
+   - Test the search box and status filter (including `"Answers incomplete"`).
+   - Test **Download Excel** and **Download CSV**: verify `.xlsx` and `.csv` files download with correct headers and member answers.
+
+
 

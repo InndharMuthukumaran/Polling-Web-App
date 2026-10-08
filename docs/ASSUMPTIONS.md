@@ -734,6 +734,56 @@ This section documents assumptions, choices, and architectural decisions made fo
 - **401 Token Invalidation**:
   - If saving answers returns 401 `invalid_token`, the local identity is cleared and the view transitions back to the claim screen.
 
+# Assumptions and Design Decisions (Part R5b: Creator Poll Creation with Fields, Identifier in Lists, and Results Export)
+
+This section documents assumptions, choices, and architectural decisions made for Part R5b.
+
+## 1. Poll Creation with Included Columns and Poll-Only Questions (`NewPollPage.tsx` & `pollForm.ts`)
+- **Included Roster Columns**:
+  - Fetched dynamically on page mount via `GET /api/v1/groups/{gid}` using the creator's `X-Admin-Token`.
+  - The group's identifier field (if one is configured) is always presented first in the checklist, locked (`disabled`) and checked (`checked=true`), accompanied by note: `"Always included so you can tell people apart."`.
+  - Non-identifier group fields appear as optional checkboxes ordered by position.
+  - Help text clarifies: `"Only you can see these. Members never see other people's details."`.
+  - If the group has no custom fields, displays `"Your roster has no extra fields yet"` with a direct link to the Roster page (`/g/:groupId/roster`).
+  - When submitting, `toCreatePayload` strips any identifier field ID from `included_field_ids` (as the backend prepends the identifier column dynamically) and omits `included_field_ids` entirely when no non-identifier columns are checked.
+- **Poll-Only Questions Editor**:
+  - Allows adding up to 15 poll-only fields.
+  - Supports field types: `text`, `number`, `choice`, `link`.
+  - Choice fields require choices specified one per line in a textarea, validating 2 to 50 unique choices.
+  - Default value inputs adapt to the field type: choice fields render a dropdown populated with the defined choices (plus an empty `"No default"` option); numeric fields validate finite numbers; link fields validate `http://` or `https://` prefix with no inner whitespace.
+  - Question names cannot be empty, must be unique across the poll (case-insensitive), and cannot collide with the group identifier field name or any checked included group field name.
+  - Omits `poll_fields` from the creation payload when none are defined.
+  - Displays field-level client validation messages and propagates server 422 `details` onto the corresponding question controls.
+
+## 2. Identifier in Defaulter Lists and Copy Actions (`AdminPollPage.tsx` & `lib/results.ts`)
+- **Visual Display**:
+  - Member identifier strings are rendered in a muted monospace style directly next to member display names across all status categories (`Not voted`, `Behind target`, `Excused`, `Done`) and within each item of the Voting History section.
+- **Copy Formatting**:
+  - `formatCopyLine(name, identifier)` formats lines as `${name} (${identifier})` when an identifier is present, and `${name}` when absent or empty.
+  - Applied uniformly in `namesForCopy` for `"Copy defaulters"` and section `"Copy names"`, ensuring that multiple members sharing identical display names remain distinguishable in copied text.
+
+## 3. Results Table and File Export (`AdminPollPage.tsx` & `lib/results.ts`)
+- **Collapsible Section & Loading State**:
+  - Section is collapsed by default.
+  - Initial open fetches `GET /api/v1/polls/{pid}/results?format=json` via `getPollResults(pollId, adminToken)`.
+  - "Refresh" button re-fetches results on demand.
+  - Integrated into the existing 15-second status polling timer: automatically refreshes results silently whenever the results section is open and the document is visible.
+- **Table Structure & Ordering**:
+  - Subtitle banner notes: `"Roster values are shown as they are right now."`.
+  - Column order: Name (`display_name`), followed by the server-returned `columns` in provided order (reading `row.group_values[key]` for `"group"` sources and `row.answers[key]` for `"poll"` sources), Status (readable text + badge), Selected options (comma-separated), Late (`Yes`, `No`, or blank), and Answers complete (`Yes` or `No`, displayed conditionally when poll-only fields exist).
+  - Missing values render as `"-"`.
+  - Link fields render as secure `<a>` tags with `target="_blank" rel="noopener noreferrer"`.
+  - All cell contents are rendered as plain text strings to prevent HTML/XSS injection.
+- **Search, Filters & Responsive Pagination**:
+  - Text search matches case-insensitively across display name, identifier, option selections, and all visible group or poll field values.
+  - Status dropdown filters: `"All"`, `"Done"`, `"Behind"`, `"Excused"`, `"Not voted"`, and `"Answers incomplete"`.
+  - Pagination limits display to 50 rows per page with `"Showing X to Y of N"` status indicators.
+  - Responsive layout: Wide table view on tablet/desktop screens with horizontal scrolling confined to the table container; clean mobile card layout on viewports narrower than 640px, eliminating horizontal page scrolling.
+- **Spreadsheet Downloads**:
+  - "Download Excel" and "Download CSV" buttons trigger blob downloads with the creator's `X-Admin-Token` header.
+  - File attachments preserve the filename specified in the server's `Content-Disposition` header.
+
+
 
 
 

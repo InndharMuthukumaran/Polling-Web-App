@@ -389,3 +389,32 @@ export async function closePoll(
   );
 }
 
+export async function getPollResults(
+  pollId: string,
+  adminToken: string,
+): Promise<import('./types').PollResultsResponse> {
+  return request<import('./types').PollResultsResponse>(
+    `/api/v1/polls/${encodeURIComponent(pollId)}/results?format=json`,
+    {
+      method: 'GET',
+      adminToken,
+    },
+  );
+}
+
+export async function downloadPollResults(
+  pollId: string,
+  adminToken: string,
+  format: 'xlsx' | 'csv',
+): Promise<Blob & { filename: string; blob: Blob }> {
+  return request<Blob & { filename: string; blob: Blob }>(
+    `/api/v1/polls/${encodeURIComponent(pollId)}/results?format=${encodeURIComponent(format)}`,
+    {
+      method: 'GET',
+      adminToken,
+      responseType: 'blob',
+    },
+  );
+}
+
+

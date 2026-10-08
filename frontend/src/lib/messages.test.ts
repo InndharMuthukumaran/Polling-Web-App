@@ -70,6 +70,15 @@ describe('messages.ts', () => {
       expect(namesForCopy(members)).toBe('Alice\nBob\nCharlie');
     });
 
+    it('formats member names with identifiers as Name (identifier) and distinguishes duplicate names', () => {
+      const members = [
+        { display_name: 'Asha K', identifier: '21001' },
+        { display_name: 'Asha K', identifier: '21002' },
+        { display_name: 'Bob', identifier: null },
+      ];
+      expect(namesForCopy(members)).toBe('Asha K (21001)\nAsha K (21002)\nBob');
+    });
+
     it('handles empty list', () => {
       expect(namesForCopy([])).toBe('');
     });

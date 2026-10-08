@@ -1,3 +1,4 @@
+import { formatCopyLine } from './results';
 import { formatDateTime } from './time';
 
 export interface PollMessageInfo {
@@ -44,9 +45,11 @@ export function buildReminder(poll: PollMessageInfo, link: string): string {
   return lines.join('\n\n');
 }
 
-export function namesForCopy(members: Array<{ display_name: string }>): string {
+export function namesForCopy(
+  members: Array<{ display_name: string; identifier?: string | null }>,
+): string {
   return members
-    .map((m) => m.display_name.trim())
+    .map((m) => formatCopyLine(m.display_name, m.identifier))
     .filter(Boolean)
     .join('\n');
 }

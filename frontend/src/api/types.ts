@@ -254,6 +254,14 @@ export interface CreatePollOptionPayload {
   role: PollOptionRole;
 }
 
+export interface PollOnlyFieldPayload {
+  name: string;
+  field_type: FieldType;
+  is_required?: boolean;
+  default_value?: string | null;
+  choices?: string[] | null;
+}
+
 export interface CreatePollPayload {
   name: string;
   description_raw?: string | null;
@@ -261,6 +269,8 @@ export interface CreatePollPayload {
   options: CreatePollOptionPayload[];
   deadline?: string | null;
   completion_time_mode: CompletionTimeMode;
+  included_field_ids?: string[];
+  poll_fields?: PollOnlyFieldPayload[];
 }
 
 export interface CreatePollResponse {
@@ -276,6 +286,22 @@ export interface CreatePollResponse {
     id: string;
     label: string;
     role: PollOptionRole;
+    position: number;
+  }>;
+  included_fields?: Array<{
+    id: string;
+    key: string;
+    name: string;
+    field_type: FieldType;
+  }>;
+  poll_fields?: Array<{
+    id: string;
+    key: string;
+    name: string;
+    field_type: FieldType;
+    is_required: boolean;
+    default_value: string | null;
+    choices: string[] | null;
     position: number;
   }>;
 }
@@ -300,26 +326,31 @@ export interface AdminPollStatusResponse {
   at_target: Array<{
     member_id: string;
     display_name: string;
+    identifier?: string | null;
     completed_at: string | null;
     late: boolean;
   }>;
   excused: Array<{
     member_id: string;
     display_name: string;
+    identifier?: string | null;
   }>;
   behind_target: Array<{
     member_id: string;
     display_name: string;
+    identifier?: string | null;
   }>;
   not_voted: Array<{
     member_id: string;
     display_name: string;
+    identifier?: string | null;
   }>;
 }
 
 export interface AdminPollHistoryResponseItem {
   member_id: string;
   display_name: string;
+  identifier?: string | null;
   history: Array<{
     option_id: string;
     option_label: string;
@@ -330,6 +361,40 @@ export interface AdminPollHistoryResponseItem {
 }
 
 export type AdminPollHistoryResponse = AdminPollHistoryResponseItem[];
+
+export interface PollResultColumn {
+  source: 'group' | 'poll';
+  key: string;
+  name: string;
+  field_type: FieldType;
+  is_identifier: boolean;
+}
+
+export interface PollResultRow {
+  member_id: string;
+  display_name: string;
+  identifier: string | null;
+  status: 'at_target' | 'behind_target' | 'excused' | 'not_voted';
+  selected_options: string[];
+  late: boolean | null;
+  completed_at: string | null;
+  group_values: Record<string, string | number | null>;
+  answers: Record<string, string | number | null>;
+  answers_updated_at: string | null;
+  answers_complete: boolean;
+}
+
+export interface PollResultsResponse {
+  poll: {
+    id: string;
+    name: string;
+    status: 'open' | 'closed';
+    deadline: string | null;
+    allow_multiple: boolean;
+  };
+  columns: PollResultColumn[];
+  rows: PollResultRow[];
+}
 
 export interface AdminGroupStorageData {
   adminToken: string;

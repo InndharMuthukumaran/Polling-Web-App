@@ -5,7 +5,13 @@ import { Button } from '../components/Button';
 import { Banner } from '../components/Banner';
 import { Spinner } from '../components/Spinner';
 import { Badge } from '../components/Badge';
-import { closePoll, getAdminPollHistory, getAdminPollStatus } from '../api/endpoints';
+import {
+  closePoll,
+  downloadPollResults,
+  getAdminPollHistory,
+  getAdminPollStatus,
+  getPollResults,
+} from '../api/endpoints';
 import { ApiError, getFriendlyErrorMessage } from '../api/client';
 import { getAdmin } from '../lib/adminStorage';
 import {
@@ -15,7 +21,16 @@ import {
   namesForCopy,
 } from '../lib/messages';
 import { describeDeadline, formatDateTime } from '../lib/time';
-import type { AdminPollHistoryResponse, AdminPollStatusResponse } from '../api/types';
+import {
+  columnValue,
+  filterResultRows,
+  statusLabel,
+} from '../lib/results';
+import type {
+  AdminPollHistoryResponse,
+  AdminPollStatusResponse,
+  PollResultsResponse,
+} from '../api/types';
 
 export const AdminPollPage: React.FC = () => {
   const { groupId, pollId } = useParams<{ groupId: string; pollId: string }>();
@@ -33,6 +48,17 @@ export const AdminPollPage: React.FC = () => {
   const [copiedReminder, setCopiedReminder] = useState(false);
   const [copiedDefaulters, setCopiedDefaulters] = useState(false);
   const [copiedSection, setCopiedSection] = useState<string | null>(null);
+
+  // Results section state
+  const [resultsOpen, setResultsOpen] = useState(false);
+  const [resultsData, setResultsData] = useState<PollResultsResponse | null>(null);
+  const [loadingResults, setLoadingResults] = useState(false);
+  const [resultsError, setResultsError] = useState<string | null>(null);
+  const [resultsSearch, setResultsSearch] = useState('');
+  const [resultsStatusFilter, setResultsStatusFilter] = useState('All');
+  const [resultsPage, setResultsPage] = useState(1);
+  const [downloadingFormat, setDownloadingFormat] = useState<'xlsx' | 'csv' | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
   // History collapsed state
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -68,6 +94,25 @@ export const AdminPollPage: React.FC = () => {
     [],
   );
 
+  const loadResults = useCallback(
+    async (pid: string, token: string, silent = false) => {
+      if (!silent) setLoadingResults(true);
+      setResultsError(null);
+
+      try {
+        const res = await getPollResults(pid, token);
+        setResultsData(res);
+      } catch (err) {
+        if (!silent) {
+          setResultsError(getFriendlyErrorMessage(err));
+        }
+      } finally {
+        if (!silent) setLoadingResults(false);
+      }
+    },
+    [],
+  );
+
   useEffect(() => {
     if (!groupId || !pollId) {
       setError('Missing group ID or poll ID.');
@@ -96,13 +141,62 @@ export const AdminPollPage: React.FC = () => {
     const intervalId = window.setInterval(() => {
       if (document.visibilityState === 'visible') {
         loadPollData(pollId, admin.adminToken, true);
+        if (resultsOpen) {
+          loadResults(pollId, admin.adminToken, true);
+        }
       }
     }, 15000);
 
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [groupId, pollId, statusData, loadPollData]);
+  }, [groupId, pollId, statusData, resultsOpen, loadPollData, loadResults]);
+
+  const handleToggleResults = () => {
+    const next = !resultsOpen;
+    setResultsOpen(next);
+    if (next && !resultsData && groupId && pollId) {
+      const admin = getAdmin(groupId);
+      if (admin?.adminToken) {
+        loadResults(pollId, admin.adminToken, false);
+      }
+    }
+  };
+
+  const handleRefreshResults = () => {
+    if (!groupId || !pollId) return;
+    const admin = getAdmin(groupId);
+    if (!admin?.adminToken) return;
+    loadResults(pollId, admin.adminToken, false);
+  };
+
+  const handleDownload = async (format: 'xlsx' | 'csv') => {
+    if (!groupId || !pollId) return;
+    const admin = getAdmin(groupId);
+    if (!admin?.adminToken) return;
+
+    setDownloadingFormat(format);
+    setDownloadError(null);
+
+    try {
+      const result = await downloadPollResults(pollId, admin.adminToken, format);
+      const filename =
+        result.filename || `${statusData?.poll.name || 'poll'}_results.${format}`;
+      const blob = result;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setDownloadError(getFriendlyErrorMessage(err));
+    } finally {
+      setDownloadingFormat(null);
+    }
+  };
 
   const handleClosePoll = async () => {
     if (!groupId || !pollId) return;
@@ -117,6 +211,9 @@ export const AdminPollPage: React.FC = () => {
       setShowCloseConfirm(false);
       // Immediate refresh after action
       await loadPollData(pollId, admin.adminToken, true);
+      if (resultsOpen) {
+        await loadResults(pollId, admin.adminToken, true);
+      }
     } catch (err) {
       setCloseError(getFriendlyErrorMessage(err));
     } finally {
@@ -181,7 +278,7 @@ export const AdminPollPage: React.FC = () => {
 
   const handleCopySectionNames = async (
     sectionName: string,
-    items: Array<{ display_name: string }>,
+    items: Array<{ display_name: string; identifier?: string | null }>,
   ) => {
     const text = namesForCopy(items);
     const ok = await copyToClipboard(text);
@@ -254,9 +351,44 @@ export const AdminPollPage: React.FC = () => {
   const lateCount = at_target.filter((m) => m.late).length;
   const totalDefaultersCount = not_voted.length + behind_target.length;
 
+  // Results calculation
+  const hasPollFields = resultsData?.columns.some((c) => c.source === 'poll') ?? false;
+  const filteredResultRows = resultsData
+    ? filterResultRows(
+        resultsData.rows,
+        resultsSearch,
+        resultsStatusFilter,
+        resultsData.columns,
+      )
+    : [];
+  const totalResultRows = filteredResultRows.length;
+  const totalResultPages = Math.max(1, Math.ceil(totalResultRows / 50));
+  const currentResultPage = Math.min(resultsPage, totalResultPages);
+  const startIdx = totalResultRows === 0 ? 0 : (currentResultPage - 1) * 50 + 1;
+  const endIdx = Math.min(currentResultPage * 50, totalResultRows);
+  const pagedResultRows = filteredResultRows.slice(
+    (currentResultPage - 1) * 50,
+    currentResultPage * 50,
+  );
+
+  const statusBadgeStyle = (status: string) => {
+    switch (status) {
+      case 'at_target':
+        return 'bg-emerald-50 text-emerald-800 border-emerald-200';
+      case 'behind_target':
+        return 'bg-amber-50 text-amber-800 border-amber-200';
+      case 'excused':
+        return 'bg-indigo-50 text-indigo-800 border-indigo-200';
+      case 'not_voted':
+        return 'bg-neutral-100 text-neutral-800 border-neutral-200';
+      default:
+        return 'bg-neutral-100 text-neutral-700 border-neutral-200';
+    }
+  };
+
   return (
     <div className="min-h-screen py-8 px-4 flex flex-col items-center">
-      <div className="w-full max-w-md space-y-6">
+      <div className="w-full max-w-4xl space-y-6">
         {/* Navigation & Header */}
         <div className="space-y-2">
           <Link
@@ -328,7 +460,7 @@ export const AdminPollPage: React.FC = () => {
             </div>
           </div>
 
-          <div className="flex gap-2 pt-1">
+          <div className="flex gap-2 pt-1 flex-wrap sm:flex-nowrap">
             <Button
               type="button"
               variant="outline"
@@ -406,7 +538,7 @@ export const AdminPollPage: React.FC = () => {
         </Card>
 
         {/* SECTION 4: Defaulter Lists Breakdown */}
-        <div className="space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* Section: Not Voted */}
           <Card className="space-y-3">
             <div className="flex items-center justify-between">
@@ -424,13 +556,18 @@ export const AdminPollPage: React.FC = () => {
             {not_voted.length === 0 ? (
               <p className="text-xs text-neutral-400">Everyone has voted.</p>
             ) : (
-              <ul className="space-y-1.5">
+              <ul className="space-y-1.5 max-h-60 overflow-y-auto">
                 {not_voted.map((m) => (
                   <li
                     key={m.member_id}
                     className="p-2 text-xs font-medium bg-neutral-50 border border-neutral-200/80 rounded-lg text-neutral-800"
                   >
-                    {m.display_name}
+                    <span>{m.display_name}</span>
+                    {m.identifier && (
+                      <span className="text-neutral-500 font-mono text-[11px] ml-2">
+                        {m.identifier}
+                      </span>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -454,13 +591,18 @@ export const AdminPollPage: React.FC = () => {
             {behind_target.length === 0 ? (
               <p className="text-xs text-neutral-400">No members behind target.</p>
             ) : (
-              <ul className="space-y-1.5">
+              <ul className="space-y-1.5 max-h-60 overflow-y-auto">
                 {behind_target.map((m) => (
                   <li
                     key={m.member_id}
                     className="p-2 text-xs font-medium bg-amber-50/60 border border-amber-200/80 rounded-lg text-amber-950"
                   >
-                    {m.display_name}
+                    <span>{m.display_name}</span>
+                    {m.identifier && (
+                      <span className="text-amber-700/80 font-mono text-[11px] ml-2">
+                        {m.identifier}
+                      </span>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -484,13 +626,18 @@ export const AdminPollPage: React.FC = () => {
             {excused.length === 0 ? (
               <p className="text-xs text-neutral-400">No excused members.</p>
             ) : (
-              <ul className="space-y-1.5">
+              <ul className="space-y-1.5 max-h-60 overflow-y-auto">
                 {excused.map((m) => (
                   <li
                     key={m.member_id}
                     className="p-2 text-xs font-medium bg-indigo-50/60 border border-indigo-200/80 rounded-lg text-indigo-950"
                   >
-                    {m.display_name}
+                    <span>{m.display_name}</span>
+                    {m.identifier && (
+                      <span className="text-indigo-700/80 font-mono text-[11px] ml-2">
+                        {m.identifier}
+                      </span>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -514,13 +661,20 @@ export const AdminPollPage: React.FC = () => {
             {at_target.length === 0 ? (
               <p className="text-xs text-neutral-400">No members have reached the target yet.</p>
             ) : (
-              <ul className="space-y-1.5">
+              <ul className="space-y-1.5 max-h-60 overflow-y-auto">
                 {at_target.map((m) => (
                   <li
                     key={m.member_id}
                     className="p-2.5 text-xs bg-emerald-50/60 border border-emerald-200/80 rounded-lg flex items-center justify-between gap-2"
                   >
-                    <span className="font-semibold text-emerald-950">{m.display_name}</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-semibold text-emerald-950">{m.display_name}</span>
+                      {m.identifier && (
+                        <span className="text-emerald-700/80 font-mono text-[11px] ml-1">
+                          {m.identifier}
+                        </span>
+                      )}
+                    </div>
                     <div className="flex items-center gap-1.5">
                       {m.late && (
                         <span className="text-[10px] font-bold uppercase tracking-wider text-rose-700 bg-rose-100 px-1.5 py-0.5 rounded">
@@ -540,7 +694,346 @@ export const AdminPollPage: React.FC = () => {
           </Card>
         </div>
 
-        {/* SECTION 5: Voting History (Collapsible) */}
+        {/* SECTION 5: Results Table (Collapsible) */}
+        <Card className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <div className="flex items-center gap-2">
+                <h2 className="text-base font-bold text-neutral-900">Results</h2>
+                {resultsData && (
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-neutral-100 text-neutral-700 border border-neutral-200">
+                    {resultsData.rows.length} rows
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-neutral-500">
+                Complete roster answers, status, and custom questions data.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              {resultsOpen && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  loading={loadingResults}
+                  onClick={handleRefreshResults}
+                >
+                  Refresh
+                </Button>
+              )}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                aria-label={resultsOpen ? 'Hide results' : 'Show results'}
+                onClick={handleToggleResults}
+              >
+                {resultsOpen ? 'Hide' : 'Show'}
+              </Button>
+            </div>
+          </div>
+
+          {resultsOpen && (
+            <div className="pt-3 border-t border-neutral-100 space-y-4">
+              <p className="text-xs text-neutral-500 italic">
+                Roster values are shown as they are right now.
+              </p>
+
+              {downloadError && <Banner type="error">{downloadError}</Banner>}
+              {resultsError && <Banner type="error">{resultsError}</Banner>}
+
+              {/* Action Toolbar: Downloads, Search, Filter */}
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-2 flex-1">
+                  <input
+                    type="search"
+                    placeholder="Search name, identifier, or value..."
+                    value={resultsSearch}
+                    onChange={(e) => {
+                      setResultsSearch(e.target.value);
+                      setResultsPage(1);
+                    }}
+                    className="w-full max-w-xs px-3.5 py-2 text-xs border border-neutral-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-600 bg-white"
+                  />
+
+                  <select
+                    value={resultsStatusFilter}
+                    onChange={(e) => {
+                      setResultsStatusFilter(e.target.value);
+                      setResultsPage(1);
+                    }}
+                    className="px-3 py-2 text-xs border border-neutral-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-600 bg-white"
+                  >
+                    <option value="All">All statuses</option>
+                    <option value="Done">Done</option>
+                    <option value="Behind">Behind</option>
+                    <option value="Excused">Excused</option>
+                    <option value="Not voted">Not voted</option>
+                    {hasPollFields && (
+                      <option value="Answers incomplete">Answers incomplete</option>
+                    )}
+                  </select>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    loading={downloadingFormat === 'xlsx'}
+                    onClick={() => handleDownload('xlsx')}
+                  >
+                    Download Excel
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    loading={downloadingFormat === 'csv'}
+                    onClick={() => handleDownload('csv')}
+                  >
+                    Download CSV
+                  </Button>
+                </div>
+              </div>
+
+              {loadingResults ? (
+                <div className="py-8 text-center space-y-2">
+                  <Spinner size="md" label="Loading results..." />
+                  <p className="text-xs text-neutral-500">Loading results table...</p>
+                </div>
+              ) : !resultsData ? (
+                <p className="text-xs text-neutral-400 text-center py-4">
+                  No results available.
+                </p>
+              ) : (
+                <>
+                  {/* Pagination Info */}
+                  <div className="flex items-center justify-between text-xs text-neutral-500 px-0.5">
+                    <span>
+                      {totalResultRows === 0
+                        ? 'No rows match your filter'
+                        : `Showing ${startIdx} to ${endIdx} of ${totalResultRows}`}
+                    </span>
+
+                    {totalResultPages > 1 && (
+                      <div className="flex items-center gap-1.5">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={currentResultPage <= 1}
+                          onClick={() => setResultsPage((p) => Math.max(1, p - 1))}
+                        >
+                          Previous
+                        </Button>
+                        <span>
+                          Page {currentResultPage} of {totalResultPages}
+                        </span>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={currentResultPage >= totalResultPages}
+                          onClick={() =>
+                            setResultsPage((p) => Math.min(totalResultPages, p + 1))
+                          }
+                        >
+                          Next
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Desktop Wide Table (Hidden on Mobile) */}
+                  <div className="hidden sm:block overflow-x-auto border border-neutral-200 rounded-xl bg-white shadow-xs">
+                    <table className="min-w-full divide-y divide-neutral-200 text-left text-xs">
+                      <thead className="bg-neutral-50 font-semibold text-neutral-600">
+                        <tr>
+                          <th className="py-3 px-3.5 sticky left-0 bg-neutral-50 z-10 shadow-xs">
+                            Name
+                          </th>
+                          {resultsData.columns.map((col) => (
+                            <th key={`${col.source}-${col.key}`} className="py-3 px-3.5">
+                              {col.name}
+                            </th>
+                          ))}
+                          <th className="py-3 px-3.5">Status</th>
+                          <th className="py-3 px-3.5">Selected options</th>
+                          <th className="py-3 px-3.5">Late</th>
+                          {hasPollFields && (
+                            <th className="py-3 px-3.5">Answers complete</th>
+                          )}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-neutral-100 text-neutral-800">
+                        {pagedResultRows.length === 0 ? (
+                          <tr>
+                            <td
+                              colSpan={
+                                4 +
+                                resultsData.columns.length +
+                                (hasPollFields ? 1 : 0)
+                              }
+                              className="py-6 text-center text-neutral-400"
+                            >
+                              No records match your search query.
+                            </td>
+                          </tr>
+                        ) : (
+                          pagedResultRows.map((row) => (
+                            <tr key={row.member_id} className="hover:bg-neutral-50/60">
+                              <td className="py-2.5 px-3.5 font-semibold text-neutral-900 sticky left-0 bg-white">
+                                {row.display_name}
+                              </td>
+                              {resultsData.columns.map((col) => {
+                                const val = columnValue(row, col);
+                                return (
+                                  <td
+                                    key={`${col.source}-${col.key}`}
+                                    className="py-2.5 px-3.5"
+                                  >
+                                    {col.field_type === 'link' && val !== '-' ? (
+                                      <a
+                                        href={val}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-indigo-600 underline font-medium hover:text-indigo-800 break-all"
+                                      >
+                                        {val}
+                                      </a>
+                                    ) : (
+                                      <span>{val}</span>
+                                    )}
+                                  </td>
+                                );
+                              })}
+                              <td className="py-2.5 px-3.5">
+                                <span
+                                  className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border ${statusBadgeStyle(
+                                    row.status,
+                                  )}`}
+                                >
+                                  {statusLabel(row.status)}
+                                </span>
+                              </td>
+                              <td className="py-2.5 px-3.5">
+                                <span>
+                                  {row.selected_options.length > 0
+                                    ? row.selected_options.join(', ')
+                                    : '-'}
+                                </span>
+                              </td>
+                              <td className="py-2.5 px-3.5">
+                                <span>
+                                  {row.late === true ? 'Yes' : row.late === false ? 'No' : ''}
+                                </span>
+                              </td>
+                              {hasPollFields && (
+                                <td className="py-2.5 px-3.5">
+                                  <span>{row.answers_complete ? 'Yes' : 'No'}</span>
+                                </td>
+                              )}
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Mobile Card Layout (Hidden on Desktop) */}
+                  <div className="sm:hidden space-y-3">
+                    {pagedResultRows.length === 0 ? (
+                      <p className="text-xs text-neutral-400 text-center py-4">
+                        No records match your search query.
+                      </p>
+                    ) : (
+                      pagedResultRows.map((row) => (
+                        <div
+                          key={row.member_id}
+                          className="p-3 bg-neutral-50 rounded-xl border border-neutral-200 text-xs space-y-2"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div>
+                              <span className="font-bold text-neutral-900 block">
+                                {row.display_name}
+                              </span>
+                              {row.identifier && (
+                                <span className="text-[11px] text-neutral-500 font-mono">
+                                  {row.identifier}
+                                </span>
+                              )}
+                            </div>
+                            <span
+                              className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border ${statusBadgeStyle(
+                                row.status,
+                              )}`}
+                            >
+                              {statusLabel(row.status)}
+                            </span>
+                          </div>
+
+                          <div className="space-y-1 pt-1 border-t border-neutral-200/60 text-[11px]">
+                            {resultsData.columns.map((col) => {
+                              const val = columnValue(row, col);
+                              return (
+                                <div
+                                  key={`${col.source}-${col.key}`}
+                                  className="flex justify-between gap-2"
+                                >
+                                  <span className="text-neutral-500">{col.name}:</span>
+                                  {col.field_type === 'link' && val !== '-' ? (
+                                    <a
+                                      href={val}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-indigo-600 underline font-medium truncate max-w-[180px]"
+                                    >
+                                      {val}
+                                    </a>
+                                  ) : (
+                                    <span className="font-medium text-neutral-800 text-right">
+                                      {val}
+                                    </span>
+                                  )}
+                                </div>
+                              );
+                            })}
+                            <div className="flex justify-between gap-2">
+                              <span className="text-neutral-500">Selected options:</span>
+                              <span className="font-medium text-neutral-800 text-right">
+                                {row.selected_options.length > 0
+                                  ? row.selected_options.join(', ')
+                                  : '-'}
+                              </span>
+                            </div>
+                            {row.late !== null && row.late !== undefined && (
+                              <div className="flex justify-between gap-2">
+                                <span className="text-neutral-500">Late:</span>
+                                <span className="font-medium text-neutral-800">
+                                  {row.late ? 'Yes' : 'No'}
+                                </span>
+                              </div>
+                            )}
+                            {hasPollFields && (
+                              <div className="flex justify-between gap-2">
+                                <span className="text-neutral-500">Answers complete:</span>
+                                <span className="font-medium text-neutral-800">
+                                  {row.answers_complete ? 'Yes' : 'No'}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </Card>
+
+        {/* SECTION 6: Voting History (Collapsible) */}
         <Card className="space-y-3">
           <div className="flex items-center justify-between">
             <div>
@@ -551,8 +1044,9 @@ export const AdminPollPage: React.FC = () => {
             </div>
             <button
               type="button"
+              aria-label={historyOpen ? 'Hide history' : 'Show history'}
               onClick={() => setHistoryOpen((prev) => !prev)}
-              className="text-xs font-semibold text-indigo-600 hover:underline"
+              className="text-xs font-semibold text-indigo-600 hover:underline cursor-pointer"
             >
               {historyOpen ? 'Hide' : 'Show'}
             </button>
@@ -570,9 +1064,14 @@ export const AdminPollPage: React.FC = () => {
                     key={member.member_id}
                     className="p-3 bg-neutral-50 rounded-xl border border-neutral-200 text-xs space-y-2"
                   >
-                    <span className="font-bold text-neutral-900 block">
-                      {member.display_name}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-neutral-900">{member.display_name}</span>
+                      {member.identifier && (
+                        <span className="text-neutral-500 font-mono text-[11px]">
+                          {member.identifier}
+                        </span>
+                      )}
+                    </div>
                     {member.history.length === 0 ? (
                       <p className="text-neutral-400">No votes recorded.</p>
                     ) : (
@@ -611,7 +1110,7 @@ export const AdminPollPage: React.FC = () => {
           )}
         </Card>
 
-        {/* SECTION 6: Close Poll Action */}
+        {/* SECTION 7: Close Poll Action */}
         {poll.status === 'open' && (
           <Card className="space-y-3">
             <h2 className="text-base font-bold text-neutral-900">Manage Poll</h2>
