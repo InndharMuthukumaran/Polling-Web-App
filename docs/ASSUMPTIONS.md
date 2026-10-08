@@ -695,6 +695,46 @@ This section documents assumptions, choices, and architectural decisions made fo
 ## 7. Mobile Layout Fix (`SwitchNameAction.tsx`, `JoinPage.tsx`, `PollPage.tsx`)
 - On viewports narrower than 480px, the "Recognized member" badge and "Not you? Switch name" button stack vertically (`flex-col sm:flex-row items-start sm:items-center gap-2`), eliminating layout breakage or overflow on mobile screens.
 
+# Assumptions and Design Decisions (Part R5a: Member Identifier Claiming & Poll Answers Form)
+
+This section documents assumptions, choices, and architectural decisions made for Part R5a (Member-side identifier lookup and claiming, and poll-only answers questionnaire).
+
+## 1. Identifier Claim Flow (`IdentifierClaim.tsx`)
+- **Claim Mode Switching**: Component inspects `claim_mode` on the group (`list` vs `identifier`).
+  - In `list` mode, delegates directly to `NameClaimList`.
+  - In `identifier` mode, renders a text input labelled with `identifier_label` (defaulting to "Identifier") and a "Find me" action button.
+- **Lookup & Feedback**:
+  - Unclaimed member found: presents confirmation banner (`"Is this you? {display_name}"`) with `"Yes, that's me"` and `"No, try again"`.
+  - User edits input: immediately clears the confirmation box and previous error states.
+  - Taken member: displays friendly notification (`"That {label} is already claimed. If it is you on a new phone, ask the group creator to reset it."`).
+  - 404 response: displays `"We could not find that {label}. Check it and try again."`
+  - 429 rate limit response: displays `"Too many attempts. Please wait a minute and try again."`
+- **Dual-Mode Display**: When `allow_name_list` is `true` in `identifier` mode, the identifier lookup form is shown first, followed by a divider (`"Or pick your name from the list"`) and the roster list with masked identifier hints (`•••001`).
+- **Identity Overwrite Protection**: Prior to sending the claim request upon clicking `"Yes, that's me"`, the browser identity storage is re-read; if an identity already exists (e.g. claimed in another tab), the claim is safely aborted.
+
+## 2. Poll-Only Answers Card (`PollAnswersCard.tsx`)
+- **Card Presentation**: Rendered on `PollPage` below the voting card and above "Your history" only when the poll defines `poll_fields` and the member is approved.
+- **Dynamic Field Controls**:
+  - `text`: standard text input (max 500 characters).
+  - `number`: text input with `inputMode="decimal"` and client-side finite number validation (supporting decimals such as `12.5`).
+  - `choice`: dropdown selector with options and an optional placeholder.
+  - `link`: URL input with `inputMode="url"` validating `http://` or `https://` prefix, no whitespace, and max 2000 characters.
+- **Defaults & Saved Values Pre-Filling**:
+  - `initialAnswerValues` pre-fills saved answers from `GET /polls/{id}/me`; if not yet saved, pre-fills field `default_value` or empty string.
+  - `toAnswersPayload` always sends every poll field (converting blanks to `""` and numbers to numeric values), ensuring predictable backend defaults/clearing.
+- **Save State & Feedback**:
+  - "Save answers" button is disabled while saving or when form values match the baseline.
+  - On save success, displays `"Saved [formatted timestamp]"`.
+  - Server 422 `details` are mapped to the matching field inputs.
+- **Required Fields & Voting Independence**:
+  - If any required field lacks a saved value, displays a reminder banner: `"Please fill in the required details so the poll creator has everything."`
+  - Required poll-only answers never prevent or block voting on options.
+- **Closed Poll Handling**:
+  - Displays recorded answers read-only with a `"This poll is closed."` banner and no Save button.
+- **401 Token Invalidation**:
+  - If saving answers returns 401 `invalid_token`, the local identity is cleared and the view transitions back to the claim screen.
+
+
 
 
 

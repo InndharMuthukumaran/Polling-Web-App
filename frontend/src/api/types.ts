@@ -6,12 +6,22 @@ export interface JoinMember {
   id: string;
   display_name: string;
   taken: boolean;
+  identifier_hint?: string | null;
 }
 
 export interface JoinGroupResponse {
   group_id: string;
   group_name: string;
+  claim_mode?: 'list' | 'identifier';
+  identifier_label?: string | null;
+  allow_name_list?: boolean;
   members: JoinMember[];
+}
+
+export interface MemberLookupResponse {
+  member_id: string;
+  display_name: string | null;
+  taken: boolean;
 }
 
 export interface ClaimRequest {
@@ -50,6 +60,19 @@ export interface PollOption {
   position: number;
 }
 
+export type FieldType = 'text' | 'number' | 'choice' | 'link';
+
+export interface PublicPollField {
+  id?: string;
+  key: string;
+  name: string;
+  field_type: FieldType;
+  is_required: boolean;
+  default_value: string | null;
+  choices: string[] | null;
+  position: number;
+}
+
 export interface PublicPollResponse {
   id: string;
   name: string;
@@ -60,6 +83,7 @@ export interface PublicPollResponse {
   options: PollOption[];
   group_name: string;
   join_code: string;
+  poll_fields?: PublicPollField[];
 }
 
 export interface VoteRequest {
@@ -81,6 +105,13 @@ export interface MemberPollHistoryItem {
 export interface MemberPollMeResponse {
   selected_option_ids: string[];
   history: MemberPollHistoryItem[];
+  answers?: Record<string, string | number | null>;
+  answers_updated_at?: string | null;
+}
+
+export interface PollAnswersResponse {
+  answers: Record<string, string | number | null>;
+  answers_updated_at: string | null;
 }
 
 export interface ApiErrorRowDetail {
@@ -106,8 +137,6 @@ export interface StoredMemberIdentity {
 }
 
 // Creator / Admin Types (Part 3B & R4)
-
-export type FieldType = 'text' | 'number' | 'choice' | 'link';
 
 export interface GroupField {
   id: string;

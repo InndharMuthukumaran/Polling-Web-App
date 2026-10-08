@@ -22,6 +22,8 @@ vi.mock('../api/endpoints', () => ({
   deleteVote: vi.fn(),
   getMyPollHistory: vi.fn(),
   releaseClaim: vi.fn(),
+  lookupIdentifier: vi.fn(),
+  saveAnswers: vi.fn(),
 }));
 
 describe('PollPage', () => {
@@ -361,6 +363,308 @@ describe('PollPage', () => {
 
     // Switched back to inline claim list
     await waitFor(() => {
+      expect(screen.getByText('Choose your name')).toBeInTheDocument();
+    });
+  });
+
+  it('poll-only fields: shows pre-filled defaults and saved answers; saving calls endpoint with every field', async () => {
+    saveMemberIdentity('lunchcode', {
+      memberToken: 'tok-alice',
+      memberId: 'mem-1',
+      displayName: 'Alice',
+    });
+    const pollWithFields: PublicPollResponse = {
+      ...mockPoll,
+      poll_fields: [
+        {
+          key: 'expected_ctc',
+          name: 'Expected CTC',
+          field_type: 'number',
+          is_required: true,
+          default_value: '12.5',
+          choices: null,
+          position: 1,
+        },
+        {
+          key: 'location',
+          name: 'Location',
+          field_type: 'choice',
+          is_required: false,
+          default_value: 'Remote',
+          choices: ['Bangalore', 'Remote'],
+          position: 2,
+        },
+      ],
+    };
+    vi.mocked(endpoints.getPublicPoll).mockResolvedValue(pollWithFields);
+    vi.mocked(endpoints.getMe).mockResolvedValue({
+      member_id: 'mem-1',
+      display_name: 'Alice',
+      group_id: 'grp-1',
+      group_name: 'Engineers',
+      claim_status: 'approved',
+    });
+    vi.mocked(endpoints.getMyPollHistory).mockResolvedValue({
+      selected_option_ids: ['opt-pizza'],
+      history: [],
+      answers: {
+        location: 'Bangalore',
+      },
+      answers_updated_at: '2026-10-08T10:00:00Z',
+    });
+    vi.mocked(endpoints.saveAnswers).mockResolvedValue({
+      answers: {
+        expected_ctc: 15,
+        location: 'Remote',
+      },
+      answers_updated_at: '2026-10-08T11:00:00Z',
+    });
+
+    renderPollPage('poll-123');
+
+    await waitFor(() => {
+      expect(screen.getByText('Your details for this poll')).toBeInTheDocument();
+    });
+
+    const ctcInput = screen.getByLabelText(/Expected CTC/i);
+    expect(ctcInput).toHaveValue('12.5');
+
+    const locInput = screen.getByLabelText(/Location/i);
+    expect(locInput).toHaveValue('Bangalore');
+
+    await userEvent.clear(ctcInput);
+    await userEvent.type(ctcInput, '15');
+    await userEvent.selectOptions(locInput, 'Remote');
+
+    const saveBtn = screen.getByRole('button', { name: /Save answers/i });
+    await userEvent.click(saveBtn);
+
+    expect(endpoints.saveAnswers).toHaveBeenCalledWith(
+      'poll-123',
+      {
+        expected_ctc: 15,
+        location: 'Remote',
+      },
+      'tok-alice',
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/Saved/i)).toBeInTheDocument();
+    });
+  });
+
+  it('server validation details appear on the right field', async () => {
+    saveMemberIdentity('lunchcode', {
+      memberToken: 'tok-alice',
+      memberId: 'mem-1',
+      displayName: 'Alice',
+    });
+    const pollWithFields: PublicPollResponse = {
+      ...mockPoll,
+      poll_fields: [
+        {
+          key: 'expected_ctc',
+          name: 'Expected CTC',
+          field_type: 'number',
+          is_required: true,
+          default_value: null,
+          choices: null,
+          position: 1,
+        },
+      ],
+    };
+    vi.mocked(endpoints.getPublicPoll).mockResolvedValue(pollWithFields);
+    vi.mocked(endpoints.getMe).mockResolvedValue({
+      member_id: 'mem-1',
+      display_name: 'Alice',
+      group_id: 'grp-1',
+      group_name: 'Engineers',
+      claim_status: 'approved',
+    });
+    vi.mocked(endpoints.getMyPollHistory).mockResolvedValue({
+      selected_option_ids: [],
+      history: [],
+      answers: {},
+      answers_updated_at: null,
+    });
+    vi.mocked(endpoints.saveAnswers).mockRejectedValue(
+      new ApiError(422, 'validation_error', 'Invalid values', [
+        { field: 'expected_ctc', message: 'Value must be at least 1.' },
+      ]),
+    );
+
+    renderPollPage('poll-123');
+
+    await waitFor(() => {
+      expect(screen.getByText('Your details for this poll')).toBeInTheDocument();
+    });
+
+    const ctcInput = screen.getByLabelText(/Expected CTC/i);
+    await userEvent.type(ctcInput, '0');
+
+    await userEvent.click(screen.getByRole('button', { name: /Save answers/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Value must be at least 1.')).toBeInTheDocument();
+    });
+  });
+
+  it('closed poll renders answers read-only with no Save button', async () => {
+    saveMemberIdentity('lunchcode', {
+      memberToken: 'tok-alice',
+      memberId: 'mem-1',
+      displayName: 'Alice',
+    });
+    const closedPoll: PublicPollResponse = {
+      ...mockPoll,
+      status: 'closed',
+      poll_fields: [
+        {
+          key: 'role',
+          name: 'Role',
+          field_type: 'text',
+          is_required: false,
+          default_value: 'Engineer',
+          choices: null,
+          position: 1,
+        },
+      ],
+    };
+    vi.mocked(endpoints.getPublicPoll).mockResolvedValue(closedPoll);
+    vi.mocked(endpoints.getMe).mockResolvedValue({
+      member_id: 'mem-1',
+      display_name: 'Alice',
+      group_id: 'grp-1',
+      group_name: 'Engineers',
+      claim_status: 'approved',
+    });
+    vi.mocked(endpoints.getMyPollHistory).mockResolvedValue({
+      selected_option_ids: [],
+      history: [],
+      answers: { role: 'Senior Engineer' },
+      answers_updated_at: null,
+    });
+
+    renderPollPage('poll-123');
+
+    await waitFor(() => {
+      expect(screen.getByText('Your details for this poll')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText('This poll is closed.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Save answers/i })).not.toBeInTheDocument();
+    expect(screen.getByText('Senior Engineer')).toBeInTheDocument();
+  });
+
+  it('required-details note appears when incomplete and disappears once saved', async () => {
+    saveMemberIdentity('lunchcode', {
+      memberToken: 'tok-alice',
+      memberId: 'mem-1',
+      displayName: 'Alice',
+    });
+    const pollWithRequired: PublicPollResponse = {
+      ...mockPoll,
+      poll_fields: [
+        {
+          key: 'expected_ctc',
+          name: 'Expected CTC',
+          field_type: 'number',
+          is_required: true,
+          default_value: null,
+          choices: null,
+          position: 1,
+        },
+      ],
+    };
+    vi.mocked(endpoints.getPublicPoll).mockResolvedValue(pollWithRequired);
+    vi.mocked(endpoints.getMe).mockResolvedValue({
+      member_id: 'mem-1',
+      display_name: 'Alice',
+      group_id: 'grp-1',
+      group_name: 'Engineers',
+      claim_status: 'approved',
+    });
+    vi.mocked(endpoints.getMyPollHistory).mockResolvedValue({
+      selected_option_ids: [],
+      history: [],
+      answers: {},
+      answers_updated_at: null,
+    });
+    vi.mocked(endpoints.saveAnswers).mockResolvedValue({
+      answers: { expected_ctc: 20 },
+      answers_updated_at: '2026-10-08T12:00:00Z',
+    });
+
+    renderPollPage('poll-123');
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Please fill in the required details so the poll creator has everything\./i),
+      ).toBeInTheDocument();
+    });
+
+    const input = screen.getByLabelText(/Expected CTC/i);
+    await userEvent.type(input, '20');
+    await userEvent.click(screen.getByRole('button', { name: /Save answers/i }));
+
+    await waitFor(() => {
+      expect(
+        screen.queryByText(/Please fill in the required details so the poll creator has everything\./i),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  it('a 401 from saveAnswers clears identity and returns to claim screen', async () => {
+    saveMemberIdentity('lunchcode', {
+      memberToken: 'tok-alice',
+      memberId: 'mem-1',
+      displayName: 'Alice',
+    });
+    const pollWithFields: PublicPollResponse = {
+      ...mockPoll,
+      poll_fields: [
+        {
+          key: 'notes',
+          name: 'Notes',
+          field_type: 'text',
+          is_required: false,
+          default_value: 'none',
+          choices: null,
+          position: 1,
+        },
+      ],
+    };
+    vi.mocked(endpoints.getPublicPoll).mockResolvedValue(pollWithFields);
+    vi.mocked(endpoints.getMe).mockResolvedValue({
+      member_id: 'mem-1',
+      display_name: 'Alice',
+      group_id: 'grp-1',
+      group_name: 'Engineers',
+      claim_status: 'approved',
+    });
+    vi.mocked(endpoints.getMyPollHistory).mockResolvedValue({
+      selected_option_ids: [],
+      history: [],
+      answers: {},
+      answers_updated_at: null,
+    });
+    vi.mocked(endpoints.saveAnswers).mockRejectedValue(
+      new ApiError(401, 'invalid_token', 'Invalid member token.'),
+    );
+    vi.mocked(endpoints.getJoinInfo).mockResolvedValue(mockGroup);
+
+    renderPollPage('poll-123');
+
+    await waitFor(() => {
+      expect(screen.getByText('Your details for this poll')).toBeInTheDocument();
+    });
+
+    const input = screen.getByLabelText(/Notes/i);
+    await userEvent.type(input, ' extra');
+    await userEvent.click(screen.getByRole('button', { name: /Save answers/i }));
+
+    await waitFor(() => {
+      expect(getMemberIdentity('lunchcode')).toBeNull();
       expect(screen.getByText('Choose your name')).toBeInTheDocument();
     });
   });

@@ -234,3 +234,26 @@ Open [http://localhost:5173](http://localhost:5173) in your primary browser.
    - Filter by status (`Active`, `Unclaimed`, etc.).
    - Test member actions: click **Reset claim** on a member and verify confirmation prompt; test **Deactivate** / **Reactivate**.
 
+### 11. Claim by Identifier & Poll Answers Smoke-Test (Part R5a)
+1. **Identifier Claim Flow (`JoinPage`)**:
+   - In a separate browser profile or incognito window, open `/join/:joinCode`.
+   - When the group has an identifier field (e.g. `Register No`) and `allow_name_list` is false:
+     - Verify the screen displays only the `Register No` input with **Find me** button.
+     - Type a non-existent identifier (e.g. `UNKNOWN_123`) and click **Find me**. Verify error banner: `"We could not find that Register No. Check it and try again."`
+     - Type an existing unclaimed identifier (e.g. `REG004`) and click **Find me**.
+     - Verify the confirmation box appears: `"Is this you? Diana Prince"` with **Yes, that's me** and **No, try again**.
+     - Click **No, try again** and verify the confirmation clears so you can edit the input.
+     - Re-search `REG004` and click **Yes, that's me**. Verify the device transitions to the recognized member view (`"You are Diana Prince"`).
+   - In another browser tab, search `REG004` again. Verify error banner: `"That Register No is already claimed. If it is you on a new phone, ask the group creator to reset it."`
+   - On the creator dashboard, toggle on **"Show the list of names on the join page"**. Reload the join page and verify the name list appears below the divider `"Or pick your name from the list"`, displaying masked hints (e.g. `•••001`).
+
+2. **Poll-Only Fields & Answers Form (`PollPage`)**:
+   - As an approved member, open a poll with poll fields.
+   - Below the voting area and above "Your history", verify the card **"Your details for this poll"** is displayed.
+   - If required fields lack saved values, verify the reminder banner: `"Please fill in the required details so the poll creator has everything."`
+   - Verify voting works independently even before saving answers.
+   - Enter answers (text, numeric values like `14.5`, select dropdown options, and link URLs starting with `https://`).
+   - Click **Save answers**. Verify the button disables while saving, then shows `"Saved [timestamp]"`, and the reminder banner disappears.
+   - When the creator closes the poll, verify the card becomes read-only with a `"This poll is closed."` notice and no Save button.
+
+

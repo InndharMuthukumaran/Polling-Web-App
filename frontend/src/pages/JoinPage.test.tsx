@@ -19,6 +19,7 @@ vi.mock('../api/endpoints', () => ({
   getMe: vi.fn(),
   getMyPolls: vi.fn(),
   releaseClaim: vi.fn(),
+  lookupIdentifier: vi.fn(),
 }));
 
 describe('JoinPage', () => {
@@ -402,6 +403,54 @@ describe('JoinPage', () => {
     });
     await waitFor(() => {
       expect(endpoints.getJoinInfo).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  it('in identifier mode: only the typing field is shown when allow_name_list is false', async () => {
+    const idGroup: JoinGroupResponse = {
+      group_id: 'grp-1',
+      group_name: 'Weekend Football',
+      claim_mode: 'identifier',
+      identifier_label: 'Register No',
+      allow_name_list: false,
+      members: [],
+    };
+    vi.mocked(endpoints.getJoinInfo).mockResolvedValue(idGroup);
+
+    renderJoinPage('team123');
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Register No/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Find me/i })).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText(/Or pick your name from the list/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('Choose your name')).not.toBeInTheDocument();
+  });
+
+  it('in identifier mode: with allow_name_list true the list appears with hints', async () => {
+    const idGroupWithList: JoinGroupResponse = {
+      group_id: 'grp-1',
+      group_name: 'Weekend Football',
+      claim_mode: 'identifier',
+      identifier_label: 'Register No',
+      allow_name_list: true,
+      members: [
+        { id: 'mem-1', display_name: 'Alice Cooper', taken: false, identifier_hint: '•••001' },
+        { id: 'mem-2', display_name: 'Bob Smith', taken: true, identifier_hint: '•••002' },
+      ],
+    };
+    vi.mocked(endpoints.getJoinInfo).mockResolvedValue(idGroupWithList);
+
+    renderJoinPage('team123');
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Register No/i)).toBeInTheDocument();
+      expect(screen.getByText(/Or pick your name from the list/i)).toBeInTheDocument();
+      expect(screen.getByText('Alice Cooper')).toBeInTheDocument();
+      expect(screen.getByText('•••001')).toBeInTheDocument();
+      expect(screen.getByText('Bob Smith')).toBeInTheDocument();
+      expect(screen.getByText('•••002')).toBeInTheDocument();
     });
   });
 });

@@ -12,8 +12,10 @@ import type {
   JoinGroupResponse,
   MeResponse,
   MemberInput,
+  MemberLookupResponse,
   MemberPollMeResponse,
   MemberPollSummary,
+  PollAnswersResponse,
   PublicPollResponse,
   ReleaseClaimResponse,
   UpdateFieldPayload,
@@ -23,6 +25,16 @@ import type {
 export async function getJoinInfo(joinCode: string): Promise<JoinGroupResponse> {
   return request<JoinGroupResponse>(`/api/v1/join/${encodeURIComponent(joinCode)}`, {
     method: 'GET',
+  });
+}
+
+export async function lookupIdentifier(
+  joinCode: string,
+  identifier: string,
+): Promise<MemberLookupResponse> {
+  return request<MemberLookupResponse>(`/api/v1/join/${encodeURIComponent(joinCode)}/lookup`, {
+    method: 'POST',
+    body: { identifier },
   });
 }
 
@@ -94,6 +106,18 @@ export async function getMyPollHistory(
   return request<MemberPollMeResponse>(`/api/v1/polls/${encodeURIComponent(pollId)}/me`, {
     method: 'GET',
     token: memberToken,
+  });
+}
+
+export async function saveAnswers(
+  pollId: string,
+  values: Record<string, string | number | null>,
+  memberToken: string,
+): Promise<PollAnswersResponse> {
+  return request<PollAnswersResponse>(`/api/v1/polls/${encodeURIComponent(pollId)}/answers`, {
+    method: 'PUT',
+    token: memberToken,
+    body: { values },
   });
 }
 

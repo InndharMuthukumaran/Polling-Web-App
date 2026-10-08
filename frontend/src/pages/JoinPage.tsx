@@ -24,7 +24,7 @@ import { Button } from '../components/Button';
 import { Banner } from '../components/Banner';
 import { Spinner } from '../components/Spinner';
 import { Badge } from '../components/Badge';
-import { NameClaimList } from '../components/NameClaimList';
+import { IdentifierClaim } from '../components/IdentifierClaim';
 import { SwitchNameAction } from '../components/SwitchNameAction';
 
 export const JoinPage: React.FC = () => {
@@ -220,7 +220,7 @@ export const JoinPage: React.FC = () => {
   }, [joinCode, checkApproval]);
 
   // Claim name handler
-  const handleClaim = async (memberId: string) => {
+  const handleClaim = async (memberId: string, displayNameHint?: string) => {
     if (!joinCode || !groupInfo) return;
 
     // Never overwrite an existing identity: re-read getMemberIdentity right before claim
@@ -240,7 +240,7 @@ export const JoinPage: React.FC = () => {
     try {
       const result = await claimMember(joinCode, memberId);
       const chosenMember = groupInfo.members.find((m) => m.id === memberId);
-      const displayName = chosenMember ? chosenMember.display_name : '';
+      const displayName = chosenMember ? chosenMember.display_name : (displayNameHint || '');
 
       const newIdentity: StoredMemberIdentity = {
         memberToken: result.member_token,
@@ -259,7 +259,7 @@ export const JoinPage: React.FC = () => {
     } catch (err) {
       if (err instanceof ApiError && err.code === 'name_already_claimed') {
         const chosenMember = groupInfo.members.find((m) => m.id === memberId);
-        const chosenName = chosenMember ? chosenMember.display_name : 'That name';
+        const chosenName = chosenMember ? chosenMember.display_name : (displayNameHint || 'That name');
 
         setSelectedMemberId(null);
         try {
@@ -467,7 +467,11 @@ export const JoinPage: React.FC = () => {
         {/* State 3: New device (No Identity) */}
         {!identity && (
           <Card>
-            <NameClaimList
+            <IdentifierClaim
+              joinCode={joinCode!}
+              claimMode={groupInfo.claim_mode}
+              identifierLabel={groupInfo.identifier_label}
+              allowNameList={groupInfo.allow_name_list}
               members={groupInfo.members}
               selectedId={selectedMemberId}
               onSelectId={setSelectedMemberId}

@@ -11,7 +11,6 @@ import {
 } from '../api/endpoints';
 import { ApiError, getFriendlyErrorMessage } from '../api/client';
 import type {
-  JoinMember,
   MemberPollHistoryItem,
   PublicPollResponse,
   StoredMemberIdentity,
@@ -27,8 +26,10 @@ import { Button } from '../components/Button';
 import { Banner } from '../components/Banner';
 import { Spinner } from '../components/Spinner';
 import { Badge } from '../components/Badge';
-import { NameClaimList } from '../components/NameClaimList';
+import { IdentifierClaim } from '../components/IdentifierClaim';
+import { PollAnswersCard } from '../components/PollAnswersCard';
 import { SwitchNameAction } from '../components/SwitchNameAction';
+import type { JoinGroupResponse } from '../api/types';
 
 export const PollPage: React.FC = () => {
   const { pollId } = useParams<{ pollId: string }>();
@@ -37,8 +38,8 @@ export const PollPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [poll, setPoll] = useState<PublicPollResponse | null>(null);
 
-  // Group members for inline claim
-  const [groupMembers, setGroupMembers] = useState<JoinMember[]>([]);
+  // Group info for inline claim
+  const [groupInfo, setGroupInfo] = useState<JoinGroupResponse | null>(null);
 
   // Member identity & claim state
   const [identity, setIdentity] = useState<StoredMemberIdentity | null>(null);
@@ -49,6 +50,10 @@ export const PollPage: React.FC = () => {
   const [isCheckingApproval, setIsCheckingApproval] = useState<boolean>(false);
   const [alreadySignedInNote, setAlreadySignedInNote] = useState<string | null>(null);
 
+
+  // Answers state for poll-only fields
+  const [savedAnswers, setSavedAnswers] = useState<Record<string, string | number | null> | null>(null);
+  const [savedAnswersUpdatedAt, setSavedAnswersUpdatedAt] = useState<string | null>(null);
 
   // Voting state
   const [selectedOptionIds, setSelectedOptionIds] = useState<string[]>([]);
@@ -63,6 +68,8 @@ export const PollPage: React.FC = () => {
       const data = await getMyPollHistory(pid, token);
       setSelectedOptionIds(data.selected_option_ids);
       setHistory(data.history);
+      setSavedAnswers(data.answers ?? {});
+      setSavedAnswersUpdatedAt(data.answers_updated_at ?? null);
     } catch {
       // Ignore initial history failure
     }
@@ -88,8 +95,8 @@ export const PollPage: React.FC = () => {
           setIdentity(null);
           setClaimStatus(null);
           try {
-            const groupInfo = await getJoinInfo(joinCode);
-            setGroupMembers(groupInfo.members);
+            const info = await getJoinInfo(joinCode);
+            setGroupInfo(info);
           } catch {
             // ignore
           }
@@ -141,14 +148,14 @@ export const PollPage: React.FC = () => {
               setClaimStatus(null);
 
               // Load member list for inline claim
-              const groupInfo = await getJoinInfo(pollData.join_code);
-              if (isMounted) setGroupMembers(groupInfo.members);
+              const info = await getJoinInfo(pollData.join_code);
+              if (isMounted) setGroupInfo(info);
             }
           }
         } else {
           // No stored identity: load member list for inline claim
-          const groupInfo = await getJoinInfo(pollData.join_code);
-          if (isMounted) setGroupMembers(groupInfo.members);
+          const info = await getJoinInfo(pollData.join_code);
+          if (isMounted) setGroupInfo(info);
         }
       } catch (err) {
         if (!isMounted) return;
@@ -192,8 +199,8 @@ export const PollPage: React.FC = () => {
 
     const reloadMembers = async () => {
       try {
-        const groupInfo = await getJoinInfo(poll.join_code);
-        setGroupMembers(groupInfo.members);
+        const info = await getJoinInfo(poll.join_code);
+        setGroupInfo(info);
       } catch {
         // ignore
       }
@@ -239,8 +246,8 @@ export const PollPage: React.FC = () => {
           setSelectedMemberId(null);
           setAlreadySignedInNote(null);
           try {
-            const groupInfo = await getJoinInfo(poll.join_code);
-            setGroupMembers(groupInfo.members);
+            const info = await getJoinInfo(poll.join_code);
+            setGroupInfo(info);
           } catch {
             // ignore
           }
@@ -255,7 +262,7 @@ export const PollPage: React.FC = () => {
   }, [poll?.join_code, checkApproval]);
 
   // Handle inline claim
-  const handleClaim = async (memberId: string) => {
+  const handleClaim = async (memberId: string, displayNameHint?: string) => {
     if (!poll) return;
 
     // Never overwrite an existing identity: re-read getMemberIdentity right before claim
@@ -274,8 +281,8 @@ export const PollPage: React.FC = () => {
 
     try {
       const result = await claimMember(poll.join_code, memberId);
-      const chosenMember = groupMembers.find((m) => m.id === memberId);
-      const displayName = chosenMember ? chosenMember.display_name : '';
+      const chosenMember = (groupInfo?.members ?? []).find((m) => m.id === memberId);
+      const displayName = chosenMember ? chosenMember.display_name : (displayNameHint || '');
 
       const newIdentity: StoredMemberIdentity = {
         memberToken: result.member_token,
@@ -292,13 +299,13 @@ export const PollPage: React.FC = () => {
       }
     } catch (err) {
       if (err instanceof ApiError && err.code === 'name_already_claimed') {
-        const chosenMember = groupMembers.find((m) => m.id === memberId);
-        const chosenName = chosenMember ? chosenMember.display_name : 'That name';
+        const chosenMember = (groupInfo?.members ?? []).find((m) => m.id === memberId);
+        const chosenName = chosenMember ? chosenMember.display_name : (displayNameHint || 'That name');
 
         setSelectedMemberId(null);
         try {
-          const groupInfo = await getJoinInfo(poll.join_code);
-          setGroupMembers(groupInfo.members);
+          const info = await getJoinInfo(poll.join_code);
+          setGroupInfo(info);
         } catch {
           // ignore
         }
@@ -321,8 +328,8 @@ export const PollPage: React.FC = () => {
 
     if (poll?.join_code) {
       try {
-        const groupInfo = await getJoinInfo(poll.join_code);
-        setGroupMembers(groupInfo.members);
+        const info = await getJoinInfo(poll.join_code);
+        setGroupInfo(info);
       } catch {
         // ignore
       }
@@ -356,8 +363,8 @@ export const PollPage: React.FC = () => {
         setIdentity(null);
         setClaimStatus(null);
         try {
-          const groupInfo = await getJoinInfo(poll.join_code);
-          setGroupMembers(groupInfo.members);
+          const info = await getJoinInfo(poll.join_code);
+          setGroupInfo(info);
         } catch {
           // ignore
         }
@@ -494,8 +501,12 @@ export const PollPage: React.FC = () => {
                 Step 1 of 2
               </span>
             </div>
-            <NameClaimList
-              members={groupMembers}
+            <IdentifierClaim
+              joinCode={poll.join_code}
+              claimMode={groupInfo?.claim_mode}
+              identifierLabel={groupInfo?.identifier_label}
+              allowNameList={groupInfo?.allow_name_list}
+              members={groupInfo?.members ?? []}
               selectedId={selectedMemberId}
               onSelectId={setSelectedMemberId}
               onClaim={handleClaim}
@@ -677,6 +688,33 @@ export const PollPage: React.FC = () => {
                 </div>
               )}
             </Card>
+
+            {/* Answers Card (Poll-only fields) */}
+            {poll.poll_fields && poll.poll_fields.length > 0 && (
+              <PollAnswersCard
+                pollId={poll.id}
+                pollFields={poll.poll_fields}
+                savedAnswers={savedAnswers}
+                savedUpdatedAt={savedAnswersUpdatedAt}
+                isClosed={isClosed}
+                memberToken={identity.memberToken}
+                onAnswersSaved={(newAnswers, updatedAt) => {
+                  setSavedAnswers(newAnswers);
+                  setSavedAnswersUpdatedAt(updatedAt);
+                }}
+                onUnauthorized={async () => {
+                  clearMemberIdentity(poll.join_code);
+                  setIdentity(null);
+                  setClaimStatus(null);
+                  try {
+                    const info = await getJoinInfo(poll.join_code);
+                    setGroupInfo(info);
+                  } catch {
+                    // ignore
+                  }
+                }}
+              />
+            )}
 
             {/* Collapsible History Section */}
             <Card className="space-y-3">

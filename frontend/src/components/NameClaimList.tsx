@@ -116,9 +116,16 @@ export const NameClaimList: React.FC<NameClaimListProps> = ({
                   className="w-full text-left p-3.5 rounded-xl border border-neutral-200 bg-neutral-50/80 opacity-60 cursor-not-allowed min-h-[44px]"
                 >
                   <div className="flex items-center justify-between">
-                    <span className="font-medium text-neutral-500 line-through">
-                      {member.display_name}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-neutral-500 line-through">
+                        {member.display_name}
+                      </span>
+                      {member.identifier_hint && (
+                        <span className="text-xs text-neutral-400 font-normal">
+                          {member.identifier_hint}
+                        </span>
+                      )}
+                    </div>
                     <span className="text-xs text-neutral-500 font-medium">Taken</span>
                   </div>
                   <p className="text-xs text-neutral-500 mt-1">
@@ -140,7 +147,14 @@ export const NameClaimList: React.FC<NameClaimListProps> = ({
                     : 'border-neutral-200 bg-white hover:border-neutral-300 hover:bg-neutral-50 text-neutral-900 font-medium'
                 }`}
               >
-                <span>{member.display_name}</span>
+                <div className="flex items-center gap-2">
+                  <span>{member.display_name}</span>
+                  {member.identifier_hint && (
+                    <span className="text-xs text-neutral-400 font-normal">
+                      {member.identifier_hint}
+                    </span>
+                  )}
+                </div>
                 <span
                   className={`w-5 h-5 rounded-full border flex items-center justify-center transition-colors ${
                     isSelected
