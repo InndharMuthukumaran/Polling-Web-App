@@ -10,7 +10,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-from app.config import settings
+from app.config import normalize_database_url, settings
 from app.db import Base
 import app.models  # Ensure all models are registered
 
@@ -31,14 +31,12 @@ def get_url() -> str:
     # 1. Check if a custom URL was passed via Alembic -x db=...
     x_args = context.get_x_argument(as_dictionary=True)
     if "db" in x_args:
-        return x_args["db"]
+        return normalize_database_url(x_args["db"]) or x_args["db"]
     # 2. Check if sqlalchemy.url was set directly on config
     main_url = config.get_main_option("sqlalchemy.url")
     if main_url:
-        return main_url
-    # 3. Check environment variables
-    if "DATABASE_URL" in os.environ:
-        return os.environ["DATABASE_URL"]
+        return normalize_database_url(main_url) or main_url
+    # 3. Settings reads DATABASE_URL from environment and normalises it
     return settings.database_url
 
 

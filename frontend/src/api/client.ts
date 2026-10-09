@@ -21,9 +21,14 @@ export interface RequestOptions extends Omit<RequestInit, 'body'> {
   responseType?: 'json' | 'blob';
 }
 
-export const API_BASE_URL: string =
-  (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/+$/, '') ||
-  'http://localhost:8000';
+export function normalizeBaseUrl(url?: string): string {
+  if (!url) return 'http://localhost:8000';
+  return url.endsWith('/') ? url.slice(0, -1) : url;
+}
+
+export const API_BASE_URL: string = normalizeBaseUrl(
+  import.meta.env.VITE_API_BASE_URL as string | undefined,
+);
 
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;

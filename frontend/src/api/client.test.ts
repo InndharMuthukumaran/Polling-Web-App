@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, getFriendlyErrorMessage, request } from './client';
+import { ApiError, getFriendlyErrorMessage, normalizeBaseUrl, request } from './client';
 
 describe('client.ts', () => {
   beforeEach(() => {
@@ -245,6 +245,14 @@ describe('client.ts', () => {
     expect(capturedBody).toBeDefined();
     const parsed = JSON.parse(capturedBody!);
     expect(parsed.default_value).toBe('');
+  });
+
+  it('removes one trailing slash from base URL and handles missing or non-trailing slash', () => {
+    expect(normalizeBaseUrl('https://api.onrender.com/')).toBe('https://api.onrender.com');
+    expect(normalizeBaseUrl('https://api.onrender.com')).toBe('https://api.onrender.com');
+    expect(normalizeBaseUrl('')).toBe('http://localhost:8000');
+    expect(normalizeBaseUrl(undefined)).toBe('http://localhost:8000');
+    expect(normalizeBaseUrl('https://api.onrender.com//')).toBe('https://api.onrender.com/');
   });
 });
 

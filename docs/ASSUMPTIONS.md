@@ -783,6 +783,58 @@ This section documents assumptions, choices, and architectural decisions made fo
   - "Download Excel" and "Download CSV" buttons trigger blob downloads with the creator's `X-Admin-Token` header.
   - File attachments preserve the filename specified in the server's `Content-Disposition` header.
 
+# Assumptions and Design Decisions (Part D1: Deployment Configuration and Tolerance)
+
+This section documents assumptions, choices, and architectural decisions made for Part D1 (Render, Vercel, and Neon deployment configuration).
+
+## 1. Backend Connection String Normalisation (`app/config.py` & `alembic/env.py`)
+- **Tolerating Host Schemes**:
+  - Managed hosts (Neon, Render) supply database URLs with `postgres://` or `postgresql://` schemes. The application and psycopg v3 driver require `postgresql+psycopg://`.
+  - `normalize_database_url` rewrites prefixes starting with `postgres://` and `postgresql://` to `postgresql+psycopg://` while leaving all trailing query parameters (`?sslmode=require`, `?channel_binding=require`, etc.) and host segments intact.
+  - Existing `postgresql+psycopg://` URLs and alternative database drivers (such as `sqlite:///...`) are left untouched.
+  - In `Settings`, a Pydantic `field_validator(mode="before")` automatically normalises both `DATABASE_URL` and `TEST_DATABASE_URL` on load.
+- **Alembic Environment**:
+  - `alembic/env.py` uses `settings.database_url` (which normalises `DATABASE_URL` from the environment). The previous raw `os.environ["DATABASE_URL"]` bypass was removed so unnormalised URLs cannot reach Alembic.
+  - Any URL passed via `-x db=...` or `sqlalchemy.url` is also normalised through `normalize_database_url`.
+
+## 2. CORS Origins Normalisation (`app/config.py`)
+- **Origin Parsing**:
+  - Browsers emit origin headers without a trailing slash (e.g. `https://my-app.vercel.app`).
+  - `parse_cors_origins` trims surrounding whitespace from each comma-separated origin, drops empty entries, and strips exactly one trailing slash if present (`origin[:-1]`).
+  - The default value remains `http://localhost:5173`.
+
+## 3. Frontend Vercel Configuration & API Client (`frontend/vercel.json`, `.env.production.example`, `client.ts`)
+- **SPA Rewrites**:
+  - `frontend/vercel.json` defines a catch-all rewrite (`source: "/(.*)"`, `destination: "/index.html"`). Because Vercel serves matching static files under `/assets` before evaluating rewrites, static assets continue to be delivered directly.
+- **Security Headers**:
+  - In `frontend/vercel.json`, all paths receive standard security headers:
+    - `X-Content-Type-Options: nosniff`
+    - `Referrer-Policy: strict-origin-when-cross-origin`
+    - `X-Frame-Options: DENY`
+- **API Base URL Sanitisation**:
+  - `normalizeBaseUrl` in `frontend/src/api/client.ts` strips one trailing slash if present from `VITE_API_BASE_URL` so configuration inputs with a trailing slash cannot result in double slashes during route requests.
+  - `frontend/.env.production.example` documents `VITE_API_BASE_URL=https://your-api-name.onrender.com` with instructions that the value is configured in the Vercel project environment settings.
+
+## 4. Render Blueprint Specification (`render.yaml`)
+- **Web Service Configuration**:
+  - Service type `web`, runtime `python`, plan `free`, region `singapore`, and root directory `backend`.
+  - `buildCommand: pip install .`
+  - `startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT` (runs migrations upon service start to accommodate Render free tier limits).
+  - `healthCheckPath: /health`.
+  - Environment variables set `PYTHON_VERSION=3.12.8`, `TRUSTED_PROXY_COUNT=1`, and declare `DATABASE_URL` and `CORS_ORIGINS` with `sync: false` for manual dashboard entry.
+- **Packaging Integrity**:
+  - Added PEP 517 `[build-system]` to `backend/pyproject.toml` so standard `pip install .` builds the wheel cleanly and installs all runtime dependencies (`openpyxl`, `python-multipart`, `psycopg-binary`, `alembic`, `uvicorn`, `fastapi`).
+
+## 5. Deployment Smoke Test Script (`scripts/smoke_test.py`)
+- **Standard Library Only**:
+  - Implemented with standard library modules (`argparse`, `urllib.request`, `urllib.error`, `json`, `sys`).
+- **Comprehensive Lifecycle Checks**:
+  1. `GET /health` returns 200 with `{"status": "ok"}` (uses configurable `--timeout`, defaulting to 90 seconds to tolerate Render cold start wakeups).
+  2. `GET /health/db` returns 200.
+  3. Preflight `OPTIONS /api/v1/groups` with `Origin: {web}` validates that `Access-Control-Allow-Origin` matches the web origin (executed when `--web` is supplied).
+  4. Web root `GET /` and SPA deep-link `GET /p/<id>` return 200 HTML (executed when `--web` is supplied).
+  5. API group and member creation flow: creates group `SMOKE TEST (safe to delete)` (201), adds a member (201), fetches join info (200), and confirms member lookup returns 404 for an unknown identifier.
+
 
 
 

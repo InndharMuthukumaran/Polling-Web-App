@@ -1,7 +1,43 @@
 """Application settings and configuration."""
 
-from pydantic import Field
+from typing import Any
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def normalize_database_url(url: str | None) -> str | None:
+    """Normalise database URLs to postgresql+psycopg scheme if postgresql."""
+    if not url:
+        return url
+    if url.startswith("postgresql+psycopg://"):
+        return url
+    if url.startswith("postgres://"):
+        return "postgresql+psycopg://" + url[len("postgres://") :]
+    if url.startswith("postgresql://"):
+        return "postgresql+psycopg://" + url[len("postgresql://") :]
+    return url
+
+
+def normalize_cors_origin(origin: str) -> str:
+    """Clean a single CORS origin string: trim spaces, remove one trailing slash."""
+    trimmed = origin.strip()
+    if trimmed.endswith("/"):
+        trimmed = trimmed[:-1]
+    return trimmed
+
+
+def parse_cors_origins(raw: str | list[str]) -> list[str]:
+    """Parse comma-separated CORS origins: trim spaces, drop empty items, remove one trailing slash."""
+    if isinstance(raw, list):
+        items = raw
+    else:
+        items = raw.split(",")
+    result: list[str] = []
+    for item in items:
+        cleaned = normalize_cors_origin(item)
+        if cleaned:
+            result.append(cleaned)
+    return result
 
 
 class Settings(BaseSettings):
@@ -38,10 +74,17 @@ class Settings(BaseSettings):
         alias="LOOKUP_LIMIT_PER_CODE",
     )
 
+    @field_validator("database_url", "test_database_url", mode="before")
+    @classmethod
+    def _normalize_db_url(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            return normalize_database_url(v)
+        return v
+
     @property
     def cors_origins_list(self) -> list[str]:
         """Return CORS origins as a trimmed list of strings."""
-        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+        return parse_cors_origins(self.cors_origins)
 
 
 settings = Settings()
