@@ -1,7 +1,7 @@
 """Admin group management endpoints."""
 
 from uuid import UUID
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Header, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -15,6 +15,8 @@ from app.api.schemas import (
     GroupSummaryResponse,
     MemberSummary,
     MembersBulkCreate,
+    MembersBulkDeleteRequest,
+    MembersBulkDeleteResponse,
     MemberUpdate,
     PollCreate,
     PollDetailResponse,
@@ -27,6 +29,11 @@ from app.services.identity import (
     add_members_bulk,
     approve_claim,
     create_group_with_admin,
+    delete_group,
+    delete_member,
+    delete_members_bulk,
+    export_roster_csv,
+    export_roster_xlsx,
     list_group_members,
     reset_claim,
     update_group_settings,
@@ -87,6 +94,19 @@ def update_settings(
         allow_name_list=payload.allow_name_list,
     )
     return GroupSummaryResponse.model_validate(updated_group)
+
+
+@router.delete("/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_group_endpoint(
+    x_confirm_group_name: str | None = Header(None, alias="X-Confirm-Group-Name"),
+    group: Group = Depends(require_admin_for_group),
+    session: Session = Depends(get_db),
+) -> Response:
+    """Permanently delete the group with all members, fields, polls, and answers (admin only)."""
+    if not x_confirm_group_name or x_confirm_group_name.strip() != group.name.strip():
+        raise PollValidationError("Type the group name to confirm.")
+    delete_group(session, group.id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(
@@ -156,6 +176,55 @@ def reset_member_claim(
     """Reset a member claim to unclaimed, revoking existing tokens (admin only)."""
     member = reset_claim(session, group.id, member_id)
     return MemberSummary.model_validate(member)
+
+
+@router.get("/{group_id}/members/export")
+def export_roster(
+    format: str = Query("csv"),
+    group: Group = Depends(require_admin_for_group),
+    session: Session = Depends(get_db),
+) -> Response:
+    """Export the group roster in CSV or XLSX format (admin only)."""
+    fmt = format.lower()
+    if fmt not in ("csv", "xlsx"):
+        raise PollValidationError(f"Invalid format '{format}'. Allowed: csv, xlsx.")
+
+    if fmt == "csv":
+        csv_bytes, filename = export_roster_csv(session, group.id)
+        return Response(
+            content=csv_bytes,
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    else:
+        xlsx_bytes, filename = export_roster_xlsx(session, group.id)
+        return Response(
+            content=xlsx_bytes,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+
+@router.post("/{group_id}/members/delete", response_model=MembersBulkDeleteResponse)
+def bulk_delete_group_members(
+    payload: MembersBulkDeleteRequest,
+    group: Group = Depends(require_admin_for_group),
+    session: Session = Depends(get_db),
+) -> MembersBulkDeleteResponse:
+    """Bulk delete members from this group (all-or-nothing, admin only)."""
+    count = delete_members_bulk(session, group.id, payload.member_ids)
+    return MembersBulkDeleteResponse(deleted=count)
+
+
+@router.delete("/{group_id}/members/{member_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_group_member(
+    member_id: UUID,
+    group: Group = Depends(require_admin_for_group),
+    session: Session = Depends(get_db),
+) -> Response:
+    """Permanently delete a member from this group (admin only)."""
+    delete_member(session, group_id=group.id, member_id=member_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(

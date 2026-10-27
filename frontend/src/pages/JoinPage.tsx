@@ -118,8 +118,10 @@ export const JoinPage: React.FC = () => {
         }
       } catch (err) {
         if (!isMounted) return;
-        if (err instanceof ApiError && err.code === 'not_found') {
-          setError('This join link is invalid or the group does not exist.');
+        if (err instanceof ApiError && (err.status === 404 || err.code === 'not_found')) {
+          if (joinCode) clearMemberIdentity(joinCode);
+          setIdentity(null);
+          setError('This group or poll no longer exists.');
         } else {
           setError(getFriendlyErrorMessage(err));
         }

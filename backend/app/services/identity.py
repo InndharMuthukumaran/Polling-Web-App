@@ -1,9 +1,13 @@
 """Identity service layer implementing group creation, admin/member tokens, and claim management."""
 
+import csv
 from datetime import datetime, timezone
+import io
+import re
 from typing import Any
 import uuid
 
+import openpyxl
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -13,6 +17,7 @@ from app.errors import (
     ClaimStateError,
     GroupNotFoundError,
     InvalidTokenError,
+    MemberGroupMismatchError,
     MemberInactiveError,
     MemberNotFoundError,
     PermissionDeniedError,
@@ -31,6 +36,7 @@ from app.services.fields import (
     validate_member_values_for_create,
     validate_member_values_for_update,
 )
+from app.services.polls import sanitize_formula_injection
 
 
 def ensure_utc(dt: datetime | None) -> datetime | None:
@@ -642,4 +648,231 @@ def lookup_member_by_identifier(
         raise MemberNotFoundError("No member matches that identifier.")
 
     return member
+
+
+def delete_member(
+    session: Session,
+    group_id: uuid.UUID | str,
+    member_id: uuid.UUID | str,
+) -> None:
+    """Permanently delete a member and all their votes, history, and poll answers.
+
+    Locks the group row first, checks that the member exists and belongs to the group,
+    deletes the member, and commits.
+    """
+    gid = resolve_uuid(group_id)
+    mid = resolve_uuid(member_id)
+
+    # Lock the group row first
+    group = session.scalar(
+        select(Group).where(Group.id == gid).with_for_update()
+    )
+    if not group:
+        raise GroupNotFoundError(f"Group {gid} not found.")
+
+    member = session.get(Member, mid)
+    if not member:
+        raise MemberNotFoundError(f"Member {mid} not found.")
+
+    if member.group_id != group.id:
+        raise MemberGroupMismatchError("Member belongs to a different group.")
+
+    session.delete(member)
+    session.commit()
+
+
+def delete_members_bulk(
+    session: Session,
+    group_id: uuid.UUID | str,
+    member_ids: list[uuid.UUID | str],
+) -> int:
+    """Bulk delete members within a group (all-or-nothing).
+
+    Validates that:
+    - member_ids has at least 1 item
+    - member_ids does not exceed MAX_MEMBERS_PER_REQUEST
+    - member_ids contains no duplicates
+    - every member_id exists and belongs to this group
+
+    If any check fails, raises PollValidationError (422) and deletes nothing.
+    Returns the count of deleted members.
+    """
+    if not member_ids:
+        raise PollValidationError("At least one member ID must be provided.")
+
+    if len(member_ids) > MAX_MEMBERS_PER_REQUEST:
+        raise PollValidationError(
+            f"Cannot delete more than {MAX_MEMBERS_PER_REQUEST} members at once."
+        )
+
+    uids = [resolve_uuid(mid) for mid in member_ids]
+    if len(uids) != len(set(uids)):
+        raise PollValidationError("Duplicate member IDs are not allowed.")
+
+    gid = resolve_uuid(group_id)
+    # Lock the group row first
+    group = session.scalar(
+        select(Group).where(Group.id == gid).with_for_update()
+    )
+    if not group:
+        raise GroupNotFoundError(f"Group {gid} not found.")
+
+    members = list(
+        session.scalars(
+            select(Member).where(
+                Member.group_id == group.id,
+                Member.id.in_(uids),
+            )
+        ).all()
+    )
+
+    if len(members) != len(uids):
+        raise PollValidationError(
+            "One or more member IDs do not belong to this group or do not exist."
+        )
+
+    for m in members:
+        session.delete(m)
+
+    session.commit()
+    return len(members)
+
+
+def delete_group(
+    session: Session,
+    group_id: uuid.UUID | str,
+) -> None:
+    """Permanently delete a group and all its members, fields, polls, votes, and answers.
+
+    Locks the group row with with_for_update() first, deletes it, and commits.
+    Cascades remove all associated entities.
+    """
+    gid = resolve_uuid(group_id)
+    group = session.scalar(
+        select(Group).where(Group.id == gid).with_for_update()
+    )
+    if not group:
+        raise GroupNotFoundError(f"Group {gid} not found.")
+
+    session.delete(group)
+    session.commit()
+
+
+def make_group_slug(name: str) -> str:
+    """Generate safe filename slug from group name."""
+    safe = re.sub(r'[^a-zA-Z0-9_\-]+', '_', name.strip())
+    safe = safe.strip('_')
+    return safe[:100] if safe else "group"
+
+
+def get_roster_data(
+    session: Session,
+    group_id: uuid.UUID | str,
+) -> tuple[Group, list[GroupField], list[Member]]:
+    """Retrieve group, ordered fields, and members for roster export."""
+    gid = resolve_uuid(group_id)
+    group = session.get(Group, gid)
+    if not group:
+        raise GroupNotFoundError(f"Group {gid} not found.")
+
+    fields = list(
+        session.scalars(
+            select(GroupField)
+            .where(GroupField.group_id == group.id)
+            .order_by(GroupField.position)
+        ).all()
+    )
+
+    members = list(
+        session.scalars(
+            select(Member)
+            .where(Member.group_id == group.id)
+            .order_by(Member.created_at.asc())
+        ).all()
+    )
+
+    return group, fields, members
+
+
+def export_roster_csv(session: Session, group_id: uuid.UUID | str) -> tuple[bytes, str]:
+    """Generate CSV bytes (UTF-8 with BOM) and safe filename for group roster."""
+    group, fields, members = get_roster_data(session, group_id)
+    slug = make_group_slug(group.name)
+    filename = f"roster-{slug}.csv"
+
+    headers = ["Name"] + [f.name for f in fields] + ["Status", "Active"]
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([sanitize_formula_injection(h) for h in headers])
+
+    status_map = {
+        "unclaimed": "Not claimed",
+        "pending": "Waiting for approval",
+        "approved": "Claimed",
+    }
+
+    for m in members:
+        status_label = status_map.get(m.claim_status, m.claim_status)
+        active_label = "Yes" if m.is_active else "No"
+        row_cells: list[Any] = [m.display_name]
+        for f in fields:
+            val = (m.field_values or {}).get(f.key, "")
+            row_cells.append(val if val is not None else "")
+        row_cells.append(status_label)
+        row_cells.append(active_label)
+
+        writer.writerow([sanitize_formula_injection(cell) for cell in row_cells])
+
+    csv_bytes = output.getvalue().encode("utf-8-sig")
+    return csv_bytes, filename
+
+
+def export_roster_xlsx(session: Session, group_id: uuid.UUID | str) -> tuple[bytes, str]:
+    """Generate Excel (.xlsx) bytes and safe filename for group roster."""
+    group, fields, members = get_roster_data(session, group_id)
+    slug = make_group_slug(group.name)
+    filename = f"roster-{slug}.xlsx"
+
+    headers = ["Name"] + [f.name for f in fields] + ["Status", "Active"]
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Roster"
+
+    for c_idx, h in enumerate(headers, start=1):
+        sanitized = sanitize_formula_injection(h)
+        cell = ws.cell(row=1, column=c_idx, value=str(sanitized))
+        cell.data_type = "s"
+
+    status_map = {
+        "unclaimed": "Not claimed",
+        "pending": "Waiting for approval",
+        "approved": "Claimed",
+    }
+
+    for r_idx, m in enumerate(members, start=2):
+        status_label = status_map.get(m.claim_status, m.claim_status)
+        active_label = "Yes" if m.is_active else "No"
+        row_cells: list[Any] = [m.display_name]
+        for f in fields:
+            val = (m.field_values or {}).get(f.key, "")
+            row_cells.append(val if val is not None else "")
+        row_cells.append(status_label)
+        row_cells.append(active_label)
+
+        for c_idx, val in enumerate(row_cells, start=1):
+            sanitized = sanitize_formula_injection(val)
+            cell = ws.cell(row=r_idx, column=c_idx)
+            if isinstance(sanitized, (int, float)) and not isinstance(sanitized, bool):
+                cell.value = sanitized
+                cell.data_type = "n"
+            else:
+                cell.value = str(sanitized) if sanitized is not None else ""
+                cell.data_type = "s"
+
+    output = io.BytesIO()
+    wb.save(output)
+    xlsx_bytes = output.getvalue()
+    return xlsx_bytes, filename
 

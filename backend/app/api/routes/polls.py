@@ -1,7 +1,7 @@
 """Poll viewing, voting, status, and administration endpoints."""
 
 from uuid import UUID
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -36,6 +36,7 @@ from app.services.polls import (
     all_reached,
     cast_vote,
     close_poll,
+    delete_poll,
     export_poll_results_csv,
     export_poll_results_xlsx,
     get_member_history,
@@ -346,3 +347,14 @@ def get_poll_results_endpoint(
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
+
+
+@router.delete("/{poll_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_poll_endpoint(
+    target: tuple[Poll, Group] = Depends(require_admin_for_poll),
+    session: Session = Depends(get_db),
+) -> Response:
+    """Permanently delete the poll and all associated records (admin only)."""
+    poll, _ = target
+    delete_poll(session, poll.id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

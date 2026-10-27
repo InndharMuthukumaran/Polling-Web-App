@@ -93,6 +93,20 @@ export const FieldsTab: React.FC<FieldsTabProps> = ({
     setEditMoreOffendersCount(0);
   };
 
+  useEffect(() => {
+    if (!isAdding && !editingFieldId) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (isAdding) resetAddForm();
+        if (editingFieldId) handleCancelEdit();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isAdding, editingFieldId]);
+
   const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!addName.trim()) {

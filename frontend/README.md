@@ -288,5 +288,42 @@ Open [http://localhost:5173](http://localhost:5173) in your primary browser.
    - Test the search box and status filter (including `"Answers incomplete"`).
    - Test **Download Excel** and **Download CSV**: verify `.xlsx` and `.csv` files download with correct headers and member answers.
 
-
-
+### 13. Deletions, Bulk Member Selection, and Roster Export Smoke-Test (Part FB)
+1. **Roster Export**:
+   - On the Roster Management page (`/g/:groupId/roster`), open the **Download roster** menu in the header.
+   - Download both **Excel** (`.xlsx`) and **CSV** (`.csv`).
+   - Verify columns: `Name`, then group fields in defined position order, then `Status` (`Not claimed`, `Waiting for approval`, `Claimed`) and `Active` (`Yes` or `No`).
+   - Verify spreadsheet formula protection: any field value starting with `=`, `+`, `-`, or `@` is escaped as text.
+2. **Bulk Member Selection & Actions**:
+   - In the Members tab, use the checkbox column in the table or checkboxes on cards.
+   - Check the header checkbox to select all members on the current page.
+   - If a search or status filter matches more than 50 members, click `"Select all M matching the current search"` in the action bar.
+   - Test the bulk action buttons:
+     - **Deactivate**: deactivates selected members.
+     - **Reactivate**: reactivates selected members.
+     - **Delete selected**: opens confirmation dialog stating `"Delete N members? This permanently deletes them and their votes, history and answers in every poll. This cannot be undone."`
+     - Click confirm and verify all selected members and their associated poll data are deleted and selection is cleared.
+3. **Single Member Deletion**:
+   - In any member row, click **Delete** (next to Edit).
+   - Verify confirmation dialog: `"Delete {name}? This permanently deletes them and their votes, history and answers in every poll. Deactivate instead keeps the data."`
+   - Confirm deletion and verify the member and their votes disappear immediately.
+   - In a member browser holding that member's token, verify future requests return 401 and clear stored identity.
+4. **Accessible Dialogs & Escape Key**:
+   - Open Add Member, Edit Member, Add Field, or Edit Field dialogs.
+   - Press **Escape** and verify the dialog closes without saving.
+5. **Delete Poll**:
+   - On `AdminPollPage` (`/g/:groupId/polls/:pollId`), locate the **Manage Poll** section.
+   - Click the dangerous **Delete poll** button below Close/Reopen.
+   - Verify confirmation dialog: `"Delete this poll? This permanently deletes the poll with all votes, history and answers. Download the results first if you need them."`
+   - Test the **Download results (Excel)** and **Download results (CSV)** buttons inside the dialog.
+   - Confirm deletion: verify the poll is permanently removed and the browser navigates to the group dashboard.
+   - Navigating to the deleted poll URL (`/p/:pollId`) shows `"This group or poll no longer exists."` and clears any saved identity for that join code.
+6. **Danger Zone & Group Deletion**:
+   - On the Dashboard (`/g/:groupId`), navigate to the **Danger zone** card at the bottom.
+   - Verify the card displays the count of members and polls, and click **Delete this group**.
+   - Verify dialog text: `"This permanently deletes the group, its members, fields, polls, votes and answers. Anyone with the join link or poll links will no longer be able to use them."`
+   - Test **Download roster (Excel)** and **Download roster (CSV)** inside the dialog.
+   - Verify the delete button remains disabled until typing the exact group name in the confirmation field.
+   - Type the exact group name and confirm deletion.
+   - Verify saved creator access for this group is cleared from the browser and the browser navigates to `/` with the banner `"Group deleted."`.
+   - Accessing the deleted group's join link (`/join/:joinCode`) displays `"This group or poll no longer exists."` and clears saved identity.

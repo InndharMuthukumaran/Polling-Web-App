@@ -3,6 +3,8 @@ import type { GroupField, GroupMember } from '../../api/types';
 import {
   addMembers,
   approveMemberClaim,
+  deleteMember,
+  deleteMembersBulk,
   resetMemberClaim,
   updateMember,
 } from '../../api/endpoints';
@@ -12,6 +14,7 @@ import { Button } from '../Button';
 import { Card } from '../Card';
 import { Badge } from '../Badge';
 import { Banner } from '../Banner';
+import { ConfirmDialog } from '../ConfirmDialog';
 import { MemberModal } from './MemberModal';
 
 interface MembersTabProps {
@@ -33,6 +36,16 @@ export const MembersTab: React.FC<MembersTabProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [currentPage, setCurrentPage] = useState(1);
+
+  // Selection State
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkActionLoading, setBulkActionLoading] = useState(false);
+
+  // Deletion State
+  const [memberToDelete, setMemberToDelete] = useState<GroupMember | null>(null);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // Add / Edit Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -70,6 +83,38 @@ export const MembersTab: React.FC<MembersTabProps> = ({
   const filtered = filterMembers(members, searchQuery, statusFilter);
   const pageSize = 50;
   const paged = paginate(filtered, currentPage, pageSize);
+
+  // Selection helpers
+  const allOnPageSelected =
+    paged.items.length > 0 && paged.items.every((m) => selectedIds.has(m.id));
+
+  const handleToggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const handleSelectAllOnPage = () => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allOnPageSelected) {
+        paged.items.forEach((m) => next.delete(m.id));
+      } else {
+        paged.items.forEach((m) => next.add(m.id));
+      }
+      return next;
+    });
+  };
+
+  const handleSelectAllMatching = () => {
+    setSelectedIds(new Set(filtered.map((m) => m.id)));
+  };
 
   const handleOpenAdd = () => {
     setEditingMember(null);
@@ -138,6 +183,78 @@ export const MembersTab: React.FC<MembersTabProps> = ({
     }
   };
 
+  // Bulk Deactivate / Reactivate
+  const handleBulkDeactivate = async () => {
+    setBulkActionLoading(true);
+    setActionError(null);
+    try {
+      const toDeactivate = members.filter((m) => selectedIds.has(m.id) && m.is_active);
+      for (const m of toDeactivate) {
+        await updateMember(groupId, m.id, adminToken, { is_active: false });
+      }
+      setSelectedIds(new Set());
+      await onRefresh();
+    } catch (err) {
+      setActionError(getFriendlyErrorMessage(err));
+    } finally {
+      setBulkActionLoading(false);
+    }
+  };
+
+  const handleBulkReactivate = async () => {
+    setBulkActionLoading(true);
+    setActionError(null);
+    try {
+      const toReactivate = members.filter((m) => selectedIds.has(m.id) && !m.is_active);
+      for (const m of toReactivate) {
+        await updateMember(groupId, m.id, adminToken, { is_active: true });
+      }
+      setSelectedIds(new Set());
+      await onRefresh();
+    } catch (err) {
+      setActionError(getFriendlyErrorMessage(err));
+    } finally {
+      setBulkActionLoading(false);
+    }
+  };
+
+  // Single Member Delete
+  const handleConfirmSingleDelete = async () => {
+    if (!memberToDelete) return;
+    setDeleteLoading(true);
+    setDeleteError(null);
+    try {
+      await deleteMember(groupId, memberToDelete.id, adminToken);
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(memberToDelete.id);
+        return next;
+      });
+      setMemberToDelete(null);
+      await onRefresh();
+    } catch (err) {
+      setDeleteError(getFriendlyErrorMessage(err));
+    } finally {
+      setDeleteLoading(false);
+    }
+  };
+
+  // Bulk Member Delete
+  const handleConfirmBulkDelete = async () => {
+    setDeleteLoading(true);
+    setDeleteError(null);
+    try {
+      await deleteMembersBulk(groupId, Array.from(selectedIds), adminToken);
+      setIsBulkDeleting(false);
+      setSelectedIds(new Set());
+      await onRefresh();
+    } catch (err) {
+      setDeleteError(getFriendlyErrorMessage(err));
+    } finally {
+      setDeleteLoading(false);
+    }
+  };
+
   const handleQuickAdd = async (e: React.FormEvent) => {
     e.preventDefault();
     const names = quickAddText
@@ -169,24 +286,27 @@ export const MembersTab: React.FC<MembersTabProps> = ({
     if (!m.is_active) {
       return <Badge status="inactive" label="Inactive" />;
     }
-    if (m.claim_status === 'pending') {
-      return <Badge status="waiting" label="Waiting for approval" />;
+    switch (m.claim_status) {
+      case 'approved':
+        return <Badge status="claimed" label="Claimed" />;
+      case 'pending':
+        return <Badge status="waiting" label="Waiting for approval" />;
+      case 'unclaimed':
+      default:
+        return <Badge status="open" label="Not claimed" />;
     }
-    if (m.claim_status === 'approved') {
-      return <Badge status="claimed" label="Claimed" />;
-    }
-    return <Badge status="not_claimed" label="Not claimed" />;
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
+      {/* Action / Error Banner */}
       {actionError && <Banner type="error">{actionError}</Banner>}
 
-      {/* Header with Search, Filter & Action Buttons */}
+      {/* Toolbar: Search, Filter, Actions */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-        <div className="flex items-center gap-2 flex-1">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 flex-1">
           <input
-            type="search"
+            type="text"
             placeholder="Search by name, identifier, or value..."
             value={searchQuery}
             onChange={(e) => {
@@ -265,7 +385,6 @@ export const MembersTab: React.FC<MembersTabProps> = ({
                 size="sm"
                 variant="ghost"
                 onClick={() => setShowQuickAdd(false)}
-                disabled={quickAddLoading}
               >
                 Cancel
               </Button>
@@ -274,16 +393,66 @@ export const MembersTab: React.FC<MembersTabProps> = ({
         </Card>
       )}
 
-      {/* Pagination Status Line */}
-      <div className="flex items-center justify-between text-xs text-neutral-500 px-1">
+      {/* Bulk Selection Bar */}
+      {selectedIds.size > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 p-3 bg-indigo-50 border border-indigo-200 rounded-xl text-xs sm:text-sm">
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <span className="font-semibold text-indigo-950">
+              {selectedIds.size} selected
+            </span>
+            {filtered.length > paged.items.length && selectedIds.size < filtered.length && (
+              <button
+                type="button"
+                onClick={handleSelectAllMatching}
+                className="text-indigo-600 hover:text-indigo-800 font-medium underline cursor-pointer"
+              >
+                Select all {filtered.length} matching the current search
+              </button>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={bulkActionLoading || deleteLoading}
+              loading={bulkActionLoading}
+              onClick={handleBulkDeactivate}
+            >
+              Deactivate
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={bulkActionLoading || deleteLoading}
+              loading={bulkActionLoading}
+              onClick={handleBulkReactivate}
+            >
+              Reactivate
+            </Button>
+            <Button
+              size="sm"
+              variant="danger"
+              disabled={bulkActionLoading || deleteLoading}
+              onClick={() => {
+                setDeleteError(null);
+                setIsBulkDeleting(true);
+              }}
+            >
+              Delete selected
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Member Count & Pagination Controls Header */}
+      <div className="flex items-center justify-between text-xs text-neutral-500">
         <span>
-          {paged.total === 0
-            ? 'No members found'
-            : `Showing ${paged.start} to ${paged.end} of ${paged.total}`}
+          Showing {paged.start} - {paged.end} of {paged.total} members
+          {filtered.length !== members.length && ` (filtered from ${members.length})`}
         </span>
 
         {paged.totalPages > 1 && (
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-2">
             <Button
               size="sm"
               variant="ghost"
@@ -313,7 +482,16 @@ export const MembersTab: React.FC<MembersTabProps> = ({
           <table className="w-full text-left text-sm border-collapse">
             <thead className="bg-neutral-50/80 border-b border-neutral-200 text-xs font-semibold text-neutral-600">
               <tr>
-                <th className="py-3 px-4 sticky left-0 bg-neutral-50/95 z-10 shadow-xs">Name</th>
+                <th className="py-3 px-3 w-10 sticky left-0 bg-neutral-50/95 z-20">
+                  <input
+                    type="checkbox"
+                    aria-label="Select all on this page"
+                    checked={allOnPageSelected}
+                    onChange={handleSelectAllOnPage}
+                    className="w-4 h-4 rounded border-neutral-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                  />
+                </th>
+                <th className="py-3 px-4 sticky left-10 bg-neutral-50/95 z-10 shadow-xs">Name</th>
                 {identifierField && (
                   <th className="py-3 px-4 font-semibold text-indigo-900 bg-indigo-50/30">
                     {identifierField.name}
@@ -332,7 +510,7 @@ export const MembersTab: React.FC<MembersTabProps> = ({
               {paged.items.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={3 + (identifierField ? 1 : 0) + otherFields.length}
+                    colSpan={4 + (identifierField ? 1 : 0) + otherFields.length}
                     className="py-8 text-center text-neutral-500 text-sm"
                   >
                     No members match your search or filter.
@@ -342,6 +520,7 @@ export const MembersTab: React.FC<MembersTabProps> = ({
                 paged.items.map((m) => {
                   const isResetting = resetConfirmId === m.id;
                   const isLoading = actionLoadingId === m.id;
+                  const isSelected = selectedIds.has(m.id);
                   const identifierVal = identifierField
                     ? m.values?.[identifierField.key] ?? m.identifier ?? '-'
                     : null;
@@ -350,11 +529,22 @@ export const MembersTab: React.FC<MembersTabProps> = ({
                     <tr
                       key={m.id}
                       className={`hover:bg-neutral-50/60 transition-colors ${
-                        !m.is_active ? 'opacity-60 bg-neutral-50/30' : ''
-                      }`}
+                        isSelected ? 'bg-indigo-50/40' : ''
+                      } ${!m.is_active ? 'opacity-60 bg-neutral-50/30' : ''}`}
                     >
+                      {/* Checkbox column */}
+                      <td className="py-3 px-3 w-10 sticky left-0 bg-white z-20">
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${m.display_name}`}
+                          checked={isSelected}
+                          onChange={() => handleToggleSelect(m.id)}
+                          className="w-4 h-4 rounded border-neutral-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                        />
+                      </td>
+
                       {/* Sticky Name column */}
-                      <td className="py-3 px-4 sticky left-0 bg-white z-10 font-medium text-neutral-900 border-r border-neutral-100 shadow-xs">
+                      <td className="py-3 px-4 sticky left-10 bg-white z-10 font-medium text-neutral-900 border-r border-neutral-100 shadow-xs">
                         {m.display_name}
                       </td>
 
@@ -442,6 +632,18 @@ export const MembersTab: React.FC<MembersTabProps> = ({
                               size="sm"
                               variant="ghost"
                               disabled={isLoading}
+                              onClick={() => {
+                                setDeleteError(null);
+                                setMemberToDelete(m);
+                              }}
+                            >
+                              Delete
+                            </Button>
+
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              disabled={isLoading}
                               onClick={() => handleToggleActive(m)}
                             >
                               {m.is_active ? 'Deactivate' : 'Reactivate'}
@@ -469,6 +671,7 @@ export const MembersTab: React.FC<MembersTabProps> = ({
             const isResetting = resetConfirmId === m.id;
             const isLoading = actionLoadingId === m.id;
             const isExpanded = Boolean(expandedMemberIds[m.id]);
+            const isSelected = selectedIds.has(m.id);
             const identifierVal = identifierField
               ? m.values?.[identifierField.key] ?? m.identifier ?? '-'
               : null;
@@ -476,20 +679,33 @@ export const MembersTab: React.FC<MembersTabProps> = ({
             return (
               <Card
                 key={m.id}
-                className={`p-4 space-y-3 ${!m.is_active ? 'opacity-60' : ''}`}
+                className={`p-4 space-y-3 ${isSelected ? 'border-indigo-400 bg-indigo-50/20' : ''} ${
+                  !m.is_active ? 'opacity-60' : ''
+                }`}
               >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="space-y-0.5">
-                    <span className="font-semibold text-sm text-neutral-900 block">
-                      {m.display_name}
-                    </span>
-                    {identifierField && (
-                      <span className="text-xs text-neutral-500 font-mono block">
-                        {identifierField.name}: {String(identifierVal)}
-                      </span>
-                    )}
+                <div className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    aria-label={`Select ${m.display_name}`}
+                    checked={isSelected}
+                    onChange={() => handleToggleSelect(m.id)}
+                    className="mt-1 w-4 h-4 rounded border-neutral-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="space-y-0.5">
+                        <span className="font-semibold text-sm text-neutral-900 block">
+                          {m.display_name}
+                        </span>
+                        {identifierField && (
+                          <span className="text-xs text-neutral-500 font-mono block">
+                            {identifierField.name}: {String(identifierVal)}
+                          </span>
+                        )}
+                      </div>
+                      <div>{renderStatusBadge(m)}</div>
+                    </div>
                   </div>
-                  <div>{renderStatusBadge(m)}</div>
                 </div>
 
                 {/* Details Accordion Toggle */}
@@ -498,7 +714,7 @@ export const MembersTab: React.FC<MembersTabProps> = ({
                     <button
                       type="button"
                       onClick={() => toggleDetails(m.id)}
-                      className="text-xs text-indigo-600 hover:text-indigo-800 font-medium inline-flex items-center gap-1"
+                      className="text-xs text-indigo-600 hover:text-indigo-800 font-medium inline-flex items-center gap-1 cursor-pointer"
                     >
                       {isExpanded ? 'Hide Details' : 'Details'}
                       <svg
@@ -591,6 +807,18 @@ export const MembersTab: React.FC<MembersTabProps> = ({
                       size="sm"
                       variant="ghost"
                       disabled={isLoading}
+                      onClick={() => {
+                        setDeleteError(null);
+                        setMemberToDelete(m);
+                      }}
+                    >
+                      Delete
+                    </Button>
+
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={isLoading}
                       onClick={() => handleToggleActive(m)}
                     >
                       {m.is_active ? 'Deactivate' : 'Reactivate'}
@@ -611,6 +839,38 @@ export const MembersTab: React.FC<MembersTabProps> = ({
         member={editingMember}
         onSave={handleSaveMember}
       />
+
+      {/* Single Member Delete Confirmation Dialog */}
+      <ConfirmDialog
+        isOpen={Boolean(memberToDelete)}
+        onClose={() => {
+          setMemberToDelete(null);
+          setDeleteError(null);
+        }}
+        onConfirm={handleConfirmSingleDelete}
+        title={`Delete ${memberToDelete?.display_name || 'member'}`}
+        message={`Delete ${memberToDelete?.display_name}? This permanently deletes them and their votes, history and answers in every poll. Deactivate instead keeps the data.`}
+        confirmText="Delete"
+        loading={deleteLoading}
+      >
+        {deleteError && <Banner type="error">{deleteError}</Banner>}
+      </ConfirmDialog>
+
+      {/* Bulk Members Delete Confirmation Dialog */}
+      <ConfirmDialog
+        isOpen={isBulkDeleting}
+        onClose={() => {
+          setIsBulkDeleting(false);
+          setDeleteError(null);
+        }}
+        onConfirm={handleConfirmBulkDelete}
+        title="Delete members"
+        message={`Delete ${selectedIds.size} members? This permanently deletes them and their votes, history and answers in every poll. This cannot be undone.`}
+        confirmText="Delete"
+        loading={deleteLoading}
+      >
+        {deleteError && <Banner type="error">{deleteError}</Banner>}
+      </ConfirmDialog>
     </div>
   );
 };

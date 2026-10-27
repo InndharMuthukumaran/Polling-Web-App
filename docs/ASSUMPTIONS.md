@@ -898,16 +898,77 @@ This section documents the assumptions, choices, and architectural decisions mad
   - Clicking triggers confirmation: `"Members will be able to vote and change their answers again. Their earlier votes and history are kept."`.
   - Confirming calls `POST /api/v1/polls/{poll_id}/reopen` and updates the page state (status badge, banner, buttons) in place without requiring a manual reload.
 
+# Assumptions and Design Decisions (Part FB: Deletions, Bulk Selection, Roster Export)
 
+This section captures assumptions and design decisions made for Part FB (Permanent Deletions, Bulk Member Selection, and Roster Export).
 
+## 1. Permanent Deletion Model & Database Cascade Integrity
+- **No Soft Deletion or Recovery**:
+  - Deletions are permanent and irreversible; no trash, archive, or soft-delete columns were introduced.
+  - All foreign keys across all database tables (`members`, `polls`, `poll_options`, `votes`, `vote_history`, `poll_answers`, `group_fields`, `poll_fields`, `poll_included_fields`) hang off `groups`, `polls`, or `members` and already feature `ON DELETE CASCADE`.
+  - Deleting parent rows removes all child records automatically at the database level. No database migrations were required.
+- **Strict Group Isolation**:
+  - Deleting a group, member, or poll never touches or mutates any data belonging to any other group.
+  - Verified by tests asserting row counts and exact state across all 10 database tables before and after deletions.
 
+## 2. Backend Endpoints & Concurrency
+- **Single Member Delete (`DELETE /api/v1/groups/{group_id}/members/{member_id}`)**:
+  - Requires group admin token (`X-Admin-Token`).
+  - Locks the group row, verifies member belongs to the group (returns 403 with generic permission denied message if from another group, 404 if non-existent).
+  - Deletes the member; votes, history, and poll answers cascade.
+  - The member's token is immediately revoked (subsequent requests return 401).
+- **Bulk Member Delete (`POST /api/v1/groups/{group_id}/members/delete`)**:
+  - Uses `POST` because some HTTP proxies/clients drop request bodies on `DELETE`.
+  - Body: `{member_ids: [uuid, ...]}` with validation bounds: `1 <= len <= MAX_MEMBERS_PER_REQUEST` and no duplicate IDs.
+  - All-or-nothing: if any ID does not belong to the group or does not exist, fails with 422 `validation_error` and deletes 0 rows.
+  - Returns `{deleted: N}` upon success.
+- **Poll Delete (`DELETE /api/v1/polls/{poll_id}`)**:
+  - Authenticates admin of the poll's group.
+  - Locks the poll row using `with_for_update().execution_options(populate_existing=True)` before deletion.
+  - When another request (e.g. a concurrent vote) is waiting on the poll row lock, once unblocked it detects the poll is deleted and cleanly returns 404 `not_found` rather than a server 500 error.
+  - Deletes the poll with all options, votes, history, answers, poll fields, and included fields.
+- **Group Delete (`DELETE /api/v1/groups/{group_id}`)**:
+  - Authenticates group admin.
+  - Requires `X-Confirm-Group-Name` header matching the group's trimmed name (`header.strip() == group.name.strip()`), else 422 with code `validation_error` and message `"Type the group name to confirm."`.
+  - Deletes the group and all associated data.
+  - Subsequent join code queries return 404 `not_found`. Subsequent admin calls with the deleted group's admin token return 404 `not_found` (via `require_admin_for_group` which raises `GroupNotFoundError`).
+- **Roster Export (`GET /api/v1/groups/{group_id}/members/export?format=csv|xlsx`)**:
+  - Authenticates group admin.
+  - Exports all members in the group without pagination limit.
+  - Columns: `Name`, then each group field in defined position order, then `Status` (`Not claimed`, `Waiting for approval`, `Claimed`) and `Active` (`Yes` or `No`).
+  - Implements spreadsheet formula injection protection: any value starting with `=`, `+`, `-`, or `@` is prepended with a single quote / written as plain text.
+  - Returns `Content-Disposition` header with file name formatted like `roster-<group_name_slug>.csv` or `.xlsx`.
 
-
-
-
-
-
-
-
-
-
+## 3. Frontend Architecture & Accessible UI
+- **Small Shared `ConfirmDialog` Component (`frontend/src/components/ConfirmDialog.tsx`)**:
+  - Accessible modal dialog using ARIA attributes (`role="dialog"`, `aria-modal="true"`).
+  - Automatically shifts focus into the dialog upon opening (focusing the Cancel button).
+  - Handles Escape key press and backdrop click to cancel.
+  - Supports flexible property conventions (`confirmText`/`confirmLabel`, `onClose`/`onCancel`, `loading`/`isLoading`).
+  - Confirm button is styled as destructive (`variant="danger"`).
+  - Used for single member delete, bulk member delete, poll delete, and group delete.
+- **Escape Key Handling for Existing Dialogs**:
+  - Added global Escape key event listeners to `MemberModal` (Add/Edit member modal) and `FieldsTab` (Add/Edit custom field) to dismiss them without saving.
+- **Roster Members Tab**:
+  - Desktop table includes a sticky checkbox column; mobile card view includes a checkbox on each card.
+  - Header checkbox toggles selection for all members visible on the current page.
+  - When filtered results exceed one page, action bar displays a `"Select all M matching the current search"` link to select all matching IDs across pages.
+  - Action bar displays `"N selected"` with buttons:
+    - **Deactivate**: calls member update endpoint for each selected active member.
+    - **Reactivate**: calls member update endpoint for each selected inactive member.
+    - **Delete selected**: opens `ConfirmDialog` with prompt `"Delete N members? This permanently deletes them and their votes, history and answers in every poll. This cannot be undone."`
+  - Each member row and card has a **Delete** button next to Edit, confirming with `"Delete {name}? This permanently deletes them and their votes, history and answers in every poll. Deactivate instead keeps the data."`.
+  - Roster reloads and selection clears upon deletion.
+- **Roster Page Header**:
+  - Added **Download roster** dropdown menu with "Excel" and "CSV" options, performing blob downloads with admin authentication.
+- **Admin Poll Page**:
+  - Manage Poll section contains a dangerous **Delete poll** button below Close/Reopen.
+  - Confirmation dialog includes two download buttons: `"Download results (Excel)"` and `"Download results (CSV)"` before confirming deletion.
+  - On confirm, deletes poll and redirects to the group dashboard (`/g/:groupId`).
+- **Dashboard Page "Danger Zone"**:
+  - Prominent Danger zone card at the bottom displaying member and poll counts and a `"Delete this group"` button.
+  - Confirmation dialog contains `"Download roster (Excel)"` and `"Download roster (CSV)"` buttons.
+  - Input field `"Type the group name to confirm"`: delete button remains disabled until input equals the group name.
+  - On success: removes saved creator access for this group from `localStorage`, redirects to `/` displaying green notice banner `"Group deleted."`.
+- **Deleted Entity 404 Behavior**:
+  - `JoinPage` and `PollPage` check for 404 (`not_found`): display message `"This group or poll no longer exists."` and clear any stored device identity for that join code.

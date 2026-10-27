@@ -484,6 +484,26 @@ def reopen_poll(
     return poll
 
 
+def delete_poll(
+    session: Session,
+    poll_id: uuid.UUID | str,
+) -> None:
+    """Permanently delete a poll and all associated records.
+
+    Locks the poll row with populate_existing=True first, deletes it, and commits.
+    Cascades remove all options, votes, history, answers, poll fields, and included fields.
+    """
+    pid = resolve_uuid(poll_id)
+    poll = session.scalar(
+        select(Poll).where(Poll.id == pid).with_for_update().execution_options(populate_existing=True)
+    )
+    if not poll:
+        raise PollNotFoundError(f"Poll {pid} not found.")
+
+    session.delete(poll)
+    session.commit()
+
+
 # ---------------------------------------------------------------------------
 # Voting Operations
 # ---------------------------------------------------------------------------

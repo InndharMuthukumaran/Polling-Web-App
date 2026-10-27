@@ -5,7 +5,10 @@ import { Button } from '../components/Button';
 import { Banner } from '../components/Banner';
 import { Spinner } from '../components/Spinner';
 import { Badge } from '../components/Badge';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import {
+  deleteGroup,
+  downloadRoster,
   getGroup,
   getGroupPolls,
   updateGroup,
@@ -37,6 +40,14 @@ export const DashboardPage: React.FC = () => {
   const [isUpdatingApproval, setIsUpdatingApproval] = useState(false);
   const [isUpdatingAllowNameList, setIsUpdatingAllowNameList] = useState(false);
   const [memberActionError, setMemberActionError] = useState<string | null>(null);
+
+  // Delete group modal state
+  const [showDeleteGroupModal, setShowDeleteGroupModal] = useState(false);
+  const [confirmNameInput, setConfirmNameInput] = useState('');
+  const [isDeletingGroup, setIsDeletingGroup] = useState(false);
+  const [deleteGroupError, setDeleteGroupError] = useState<string | null>(null);
+  const [downloadingRosterFormat, setDownloadingRosterFormat] = useState<'xlsx' | 'csv' | null>(null);
+  const [downloadRosterError, setDownloadRosterError] = useState<string | null>(null);
 
   const loadDashboard = useCallback(
     async (token: string, gid: string) => {
@@ -148,6 +159,52 @@ export const DashboardPage: React.FC = () => {
       setMemberActionError(getFriendlyErrorMessage(err));
     } finally {
       setIsUpdatingAllowNameList(false);
+    }
+  };
+
+  const handleDownloadRoster = async (format: 'xlsx' | 'csv') => {
+    if (!groupId) return;
+    const admin = getAdmin(groupId);
+    if (!admin?.adminToken) return;
+
+    setDownloadingRosterFormat(format);
+    setDownloadRosterError(null);
+
+    try {
+      const result = await downloadRoster(groupId, admin.adminToken, format);
+      const filename =
+        result.filename || `roster-${group?.name || 'group'}.${format}`;
+      const url = URL.createObjectURL(result);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setDownloadRosterError(getFriendlyErrorMessage(err));
+    } finally {
+      setDownloadingRosterFormat(null);
+    }
+  };
+
+  const handleDeleteGroup = async () => {
+    if (!groupId || !group) return;
+    const admin = getAdmin(groupId);
+    if (!admin?.adminToken) return;
+
+    setIsDeletingGroup(true);
+    setDeleteGroupError(null);
+
+    try {
+      await deleteGroup(groupId, admin.adminToken, confirmNameInput.trim());
+      clearAdmin(groupId);
+      setShowDeleteGroupModal(false);
+      navigate('/', { state: { notice: 'Group deleted.' } });
+    } catch (err) {
+      setDeleteGroupError(getFriendlyErrorMessage(err));
+      setIsDeletingGroup(false);
     }
   };
 
@@ -415,6 +472,86 @@ export const DashboardPage: React.FC = () => {
             )}
           </div>
         </Card>
+
+        {/* CARD 4: Danger zone */}
+        <Card className="space-y-4 border-rose-200 bg-rose-50/20">
+          <div className="flex items-start justify-between gap-3">
+            <div className="space-y-1">
+              <h2 className="text-base font-bold text-rose-900">Danger zone</h2>
+              <p className="text-xs text-neutral-600">
+                {group.members?.length || 0} in roster &bull; {polls.length} {polls.length === 1 ? 'poll' : 'polls'}
+              </p>
+            </div>
+            <Button
+              variant="danger"
+              size="sm"
+              onClick={() => {
+                setConfirmNameInput('');
+                setDeleteGroupError(null);
+                setDownloadRosterError(null);
+                setShowDeleteGroupModal(true);
+              }}
+            >
+              Delete this group
+            </Button>
+          </div>
+        </Card>
+
+        <ConfirmDialog
+          isOpen={showDeleteGroupModal}
+          title="Delete this group"
+          message="This permanently deletes the group, its members, fields, polls, votes and answers. Anyone with the join link or poll links will no longer be able to use them."
+          confirmLabel="Delete this group"
+          variant="danger"
+          isLoading={isDeletingGroup}
+          confirmDisabled={confirmNameInput.trim() !== group.name.trim()}
+          onConfirm={handleDeleteGroup}
+          onCancel={() => setShowDeleteGroupModal(false)}
+        >
+          <div className="space-y-4 pt-1">
+            {downloadRosterError && <Banner type="error">{downloadRosterError}</Banner>}
+            {deleteGroupError && <Banner type="error">{deleteGroupError}</Banner>}
+
+            <div className="flex flex-col sm:flex-row gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                loading={downloadingRosterFormat === 'xlsx'}
+                onClick={() => handleDownloadRoster('xlsx')}
+              >
+                Download roster (Excel)
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                loading={downloadingRosterFormat === 'csv'}
+                onClick={() => handleDownloadRoster('csv')}
+              >
+                Download roster (CSV)
+              </Button>
+            </div>
+
+            <div className="space-y-1.5">
+              <label
+                htmlFor="confirm-group-name-input"
+                className="block text-xs font-semibold text-neutral-700"
+              >
+                Type the group name to confirm
+              </label>
+              <input
+                id="confirm-group-name-input"
+                type="text"
+                placeholder="Type the group name to confirm"
+                value={confirmNameInput}
+                onChange={(e) => setConfirmNameInput(e.target.value)}
+                className="w-full text-xs bg-white border border-neutral-300 rounded-xl px-3 py-2 text-neutral-900 focus:outline-none focus:ring-2 focus:ring-rose-500"
+                autoComplete="off"
+              />
+            </div>
+          </div>
+        </ConfirmDialog>
       </div>
     </div>
   );

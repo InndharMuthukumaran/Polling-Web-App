@@ -85,6 +85,29 @@ export function clearMemberIdentity(joinCode: string): void {
   removeRaw(key);
 }
 
+export function clearAllMemberIdentities(): void {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < window.localStorage.length; i++) {
+        const key = window.localStorage.key(i);
+        if (key && key.startsWith('pollapp.member.')) {
+          keysToRemove.push(key);
+        }
+      }
+      keysToRemove.forEach((k) => window.localStorage.removeItem(k));
+    }
+  } catch {
+    // ignore
+  }
+
+  for (const key of Array.from(memoryStore.keys())) {
+    if (key.startsWith('pollapp.member.')) {
+      memoryStore.delete(key);
+    }
+  }
+}
+
 /** Helper for test cleanup */
 export function _clearMemoryStore(): void {
   memoryStore.clear();

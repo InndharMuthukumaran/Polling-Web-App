@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { Banner } from '../components/Banner';
@@ -11,6 +11,8 @@ import type { CreateGroupResponse } from '../api/types';
 
 export const HomePage: React.FC = () => {
   const navigate = useNavigate();
+  const location = useLocation();
+  const notice = (location.state as { notice?: string } | null)?.notice;
 
   // Create Group State
   const [newGroupName, setNewGroupName] = useState('');
@@ -212,6 +214,10 @@ export const HomePage: React.FC = () => {
           <h1 className="text-2xl font-bold text-neutral-900 tracking-tight">Polling App</h1>
           <p className="text-xs text-neutral-500 font-medium">Group Chat Polling & Tracking</p>
         </div>
+
+        {notice && (
+          <Banner type="success">{notice}</Banner>
+        )}
 
         {/* Member notice */}
         <div className="p-3.5 bg-neutral-50 border border-neutral-200/80 rounded-xl text-center text-xs text-neutral-600">

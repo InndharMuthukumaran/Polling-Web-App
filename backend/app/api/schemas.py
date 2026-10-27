@@ -131,6 +131,14 @@ class MemberUpdate(BaseModel):
     values: dict[str, Any] | None = None
 
 
+class MembersBulkDeleteRequest(BaseModel):
+    member_ids: list[UUID]
+
+
+class MembersBulkDeleteResponse(BaseModel):
+    deleted: int
+
+
 # ---------------------------------------------------------------------------
 # Join & Claim Schemas
 # ---------------------------------------------------------------------------

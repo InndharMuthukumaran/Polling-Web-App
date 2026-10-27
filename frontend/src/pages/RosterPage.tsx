@@ -4,7 +4,7 @@ import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { Banner } from '../components/Banner';
 import { Spinner } from '../components/Spinner';
-import { getGroup } from '../api/endpoints';
+import { getGroup, downloadRoster } from '../api/endpoints';
 import { ApiError, getFriendlyErrorMessage } from '../api/client';
 import { clearAdmin, getAdmin, saveAdmin } from '../lib/adminStorage';
 import type { AdminGroupDetailResponse } from '../api/types';
@@ -32,6 +32,11 @@ export const RosterPage: React.FC = () => {
   const [reconnectToken, setReconnectToken] = useState('');
   const [isReconnecting, setIsReconnecting] = useState(false);
   const [reconnectError, setReconnectError] = useState<string | null>(null);
+
+  // Download roster state
+  const [isDownloadOpen, setIsDownloadOpen] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
   const loadRoster = useCallback(
     async (token: string, gid: string) => {
@@ -99,6 +104,33 @@ export const RosterPage: React.FC = () => {
     if (!admin?.adminToken) return;
     const groupData = await getGroup(groupId, admin.adminToken);
     setGroup(groupData);
+  };
+
+  const handleDownload = async (format: 'xlsx' | 'csv') => {
+    setIsDownloadOpen(false);
+    if (!groupId) return;
+    const admin = getAdmin(groupId);
+    if (!admin?.adminToken) return;
+
+    setIsDownloading(true);
+    setDownloadError(null);
+
+    try {
+      const result = await downloadRoster(groupId, admin.adminToken, format);
+      const url = window.URL.createObjectURL(result);
+      const a = document.createElement('a');
+      a.href = url;
+      const filename = result.filename || `roster.${format}`;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (err) {
+      setDownloadError(getFriendlyErrorMessage(err));
+    } finally {
+      setIsDownloading(false);
+    }
   };
 
   const setTab = (newTab: TabKey) => {
@@ -205,15 +237,47 @@ export const RosterPage: React.FC = () => {
           >
             &larr; Back to Dashboard
           </Link>
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
             <div>
               <h1 className="text-2xl font-bold text-neutral-900 tracking-tight">Roster Management</h1>
               <p className="text-xs text-neutral-500 font-medium">{group.name}</p>
             </div>
-            <span className="text-xs font-mono bg-neutral-100 text-neutral-600 px-2 py-1 rounded-md">
-              Admin
-            </span>
+            <div className="flex items-center gap-2">
+              <div className="relative">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={isDownloading}
+                  loading={isDownloading}
+                  onClick={() => setIsDownloadOpen((prev) => !prev)}
+                >
+                  Download roster ▾
+                </Button>
+                {isDownloadOpen && (
+                  <div className="absolute right-0 mt-1 w-36 bg-white rounded-xl shadow-lg border border-neutral-200 py-1 z-30">
+                    <button
+                      type="button"
+                      onClick={() => handleDownload('xlsx')}
+                      className="w-full text-left px-3.5 py-2 text-xs font-medium text-neutral-700 hover:bg-neutral-100 cursor-pointer"
+                    >
+                      Excel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDownload('csv')}
+                      className="w-full text-left px-3.5 py-2 text-xs font-medium text-neutral-700 hover:bg-neutral-100 cursor-pointer"
+                    >
+                      CSV
+                    </button>
+                  </div>
+                )}
+              </div>
+              <span className="text-xs font-mono bg-neutral-100 text-neutral-600 px-2 py-1 rounded-md">
+                Admin
+              </span>
+            </div>
           </div>
+          {downloadError && <Banner type="error">{downloadError}</Banner>}
         </div>
 
         {/* Tab Navigation */}

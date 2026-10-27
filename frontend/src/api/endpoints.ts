@@ -432,4 +432,78 @@ export async function downloadPollResults(
   );
 }
 
+export async function deleteMember(
+  groupId: string,
+  memberId: string,
+  adminToken: string,
+): Promise<void> {
+  return request<void>(
+    `/api/v1/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(memberId)}`,
+    {
+      method: 'DELETE',
+      adminToken,
+    },
+  );
+}
+
+export async function deleteMembersBulk(
+  groupId: string,
+  memberIds: string[],
+  adminToken: string,
+): Promise<{ deleted: number }> {
+  return request<{ deleted: number }>(
+    `/api/v1/groups/${encodeURIComponent(groupId)}/members/delete`,
+    {
+      method: 'POST',
+      adminToken,
+      body: { member_ids: memberIds },
+    },
+  );
+}
+
+export async function deletePoll(
+  pollId: string,
+  adminToken: string,
+): Promise<void> {
+  return request<void>(
+    `/api/v1/polls/${encodeURIComponent(pollId)}`,
+    {
+      method: 'DELETE',
+      adminToken,
+    },
+  );
+}
+
+export async function deleteGroup(
+  groupId: string,
+  adminToken: string,
+  confirmGroupName: string,
+): Promise<void> {
+  return request<void>(
+    `/api/v1/groups/${encodeURIComponent(groupId)}`,
+    {
+      method: 'DELETE',
+      adminToken,
+      headers: {
+        'X-Confirm-Group-Name': confirmGroupName,
+      },
+    },
+  );
+}
+
+export async function downloadRoster(
+  groupId: string,
+  adminToken: string,
+  format: 'xlsx' | 'csv',
+): Promise<Blob & { filename: string; blob: Blob }> {
+  return request<Blob & { filename: string; blob: Blob }>(
+    `/api/v1/groups/${encodeURIComponent(groupId)}/members/export?format=${encodeURIComponent(format)}`,
+    {
+      method: 'GET',
+      adminToken,
+      responseType: 'blob',
+    },
+  );
+}
+
 

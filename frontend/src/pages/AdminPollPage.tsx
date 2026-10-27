@@ -1,12 +1,14 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { Banner } from '../components/Banner';
 import { Spinner } from '../components/Spinner';
 import { Badge } from '../components/Badge';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import {
   closePoll,
+  deletePoll,
   downloadPollResults,
   getAdminPollHistory,
   getAdminPollStatus,
@@ -35,6 +37,7 @@ import type {
 
 export const AdminPollPage: React.FC = () => {
   const { groupId, pollId } = useParams<{ groupId: string; pollId: string }>();
+  const navigate = useNavigate();
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -73,6 +76,11 @@ export const AdminPollPage: React.FC = () => {
   const [showReopenConfirm, setShowReopenConfirm] = useState(false);
   const [isReopening, setIsReopening] = useState(false);
   const [reopenError, setReopenError] = useState<string | null>(null);
+
+  // Delete poll confirmation dialog
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [isDeletingPoll, setIsDeletingPoll] = useState(false);
+  const [deletePollError, setDeletePollError] = useState<string | null>(null);
 
   const loadPollData = useCallback(
     async (pid: string, token: string, silent = false) => {
@@ -269,6 +277,24 @@ export const AdminPollPage: React.FC = () => {
       setReopenError(getFriendlyErrorMessage(err));
     } finally {
       setIsReopening(false);
+    }
+  };
+
+  const handleDeletePoll = async () => {
+    if (!groupId || !pollId) return;
+    const admin = getAdmin(groupId);
+    if (!admin?.adminToken) return;
+
+    setIsDeletingPoll(true);
+    setDeletePollError(null);
+
+    try {
+      await deletePoll(pollId, admin.adminToken);
+      setShowDeleteConfirm(false);
+      navigate(`/g/${groupId}`);
+    } catch (err) {
+      setDeletePollError(getFriendlyErrorMessage(err));
+      setIsDeletingPoll(false);
     }
   };
 
@@ -1234,7 +1260,56 @@ export const AdminPollPage: React.FC = () => {
               </Button>
             )
           )}
+
+          <div className="pt-2 border-t border-neutral-100">
+            <Button
+              variant="danger"
+              fullWidth
+              onClick={() => {
+                setDeletePollError(null);
+                setShowDeleteConfirm(true);
+              }}
+            >
+              Delete poll
+            </Button>
+          </div>
         </Card>
+
+        <ConfirmDialog
+          isOpen={showDeleteConfirm}
+          title="Delete poll"
+          message="Delete this poll? This permanently deletes the poll with all votes, history and answers. Download the results first if you need them."
+          confirmLabel="Delete poll"
+          variant="danger"
+          isLoading={isDeletingPoll}
+          onConfirm={handleDeletePoll}
+          onCancel={() => setShowDeleteConfirm(false)}
+        >
+          <div className="space-y-2 pt-1">
+            {downloadError && <Banner type="error">{downloadError}</Banner>}
+            {deletePollError && <Banner type="error">{deletePollError}</Banner>}
+            <div className="flex flex-col sm:flex-row gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                loading={downloadingFormat === 'xlsx'}
+                onClick={() => handleDownload('xlsx')}
+              >
+                Download results (Excel)
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                loading={downloadingFormat === 'csv'}
+                onClick={() => handleDownload('csv')}
+              >
+                Download results (CSV)
+              </Button>
+            </div>
+          </div>
+        </ConfirmDialog>
       </div>
     </div>
   );

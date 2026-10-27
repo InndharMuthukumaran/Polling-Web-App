@@ -16,6 +16,7 @@ import type {
   StoredMemberIdentity,
 } from '../api/types';
 import {
+  clearAllMemberIdentities,
   clearMemberIdentity,
   getMemberIdentity,
   saveMemberIdentity,
@@ -159,8 +160,13 @@ export const PollPage: React.FC = () => {
         }
       } catch (err) {
         if (!isMounted) return;
-        if (err instanceof ApiError && err.code === 'not_found') {
-          setError('This poll does not exist or may have been deleted.');
+        if (err instanceof ApiError && (err.status === 404 || err.code === 'not_found')) {
+          if (poll?.join_code) {
+            clearMemberIdentity(poll.join_code);
+          }
+          clearAllMemberIdentities();
+          setIdentity(null);
+          setError('This group or poll no longer exists.');
         } else {
           setError(getFriendlyErrorMessage(err));
         }
@@ -358,6 +364,13 @@ export const PollPage: React.FC = () => {
       const histData = await getMyPollHistory(poll.id, identity.memberToken);
       setHistory(histData.history);
     } catch (err) {
+      if (err instanceof ApiError && (err.status === 404 || err.code === 'not_found')) {
+        if (poll?.join_code) clearMemberIdentity(poll.join_code);
+        clearAllMemberIdentities();
+        setIdentity(null);
+        setError('This group or poll no longer exists.');
+        return;
+      }
       if (err instanceof ApiError && err.code === 'invalid_token') {
         clearMemberIdentity(poll.join_code);
         setIdentity(null);
@@ -388,6 +401,13 @@ export const PollPage: React.FC = () => {
       const histData = await getMyPollHistory(poll.id, identity.memberToken);
       setHistory(histData.history);
     } catch (err) {
+      if (err instanceof ApiError && (err.status === 404 || err.code === 'not_found')) {
+        if (poll?.join_code) clearMemberIdentity(poll.join_code);
+        clearAllMemberIdentities();
+        setIdentity(null);
+        setError('This group or poll no longer exists.');
+        return;
+      }
       if (err instanceof ApiError && err.code === 'invalid_token') {
         clearMemberIdentity(poll.join_code);
         setIdentity(null);
