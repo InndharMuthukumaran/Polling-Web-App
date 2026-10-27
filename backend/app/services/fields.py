@@ -14,6 +14,14 @@ from app.errors import (
     GroupNotFoundError,
     PollValidationError,
 )
+from app.limits import (
+    MAX_CHOICES,
+    MAX_CHOICE_LENGTH,
+    MAX_GROUP_FIELDS,
+    MAX_LINK_LENGTH,
+    MAX_TEXT_LENGTH,
+    MIN_CHOICES,
+)
 from app.models import Group, GroupField, Member
 
 
@@ -76,11 +84,13 @@ def generate_field_key(name: str, existing_keys: set[str]) -> str:
 
 
 def validate_choices(choices: Any) -> list[str]:
-    """Validate choices for a choice field: 2 to 50 unique items, 1 to 100 chars each."""
+    """Validate choices for a choice field: MIN_CHOICES to MAX_CHOICES unique items, 1 to MAX_CHOICE_LENGTH chars each."""
     if not isinstance(choices, list):
         raise PollValidationError("Choices must be a list of strings.")
-    if len(choices) < 2 or len(choices) > 50:
-        raise PollValidationError("A choice field must have between 2 and 50 choices.")
+    if len(choices) < MIN_CHOICES or len(choices) > MAX_CHOICES:
+        raise PollValidationError(
+            f"A choice field must have between {MIN_CHOICES} and {MAX_CHOICES} choices."
+        )
 
     seen: set[str] = set()
     cleaned: list[str] = []
@@ -88,9 +98,9 @@ def validate_choices(choices: Any) -> list[str]:
         if not isinstance(item, str):
             raise PollValidationError("Each choice must be a string.")
         trimmed = item.strip()
-        if not (1 <= len(trimmed) <= 100):
+        if not (1 <= len(trimmed) <= MAX_CHOICE_LENGTH):
             raise PollValidationError(
-                "Each choice must be between 1 and 100 characters."
+                f"Each choice must be between 1 and {MAX_CHOICE_LENGTH} characters."
             )
         cf = trimmed.casefold()
         if cf in seen:
@@ -114,16 +124,16 @@ def validate_and_canonicalize_value(
         if not isinstance(val, str):
             raise PollValidationError(f"{label} must be a text string.")
         trimmed = val.strip()
-        if len(trimmed) > 500:
-            raise PollValidationError(f"{label} must be at most 500 characters.")
+        if len(trimmed) > MAX_TEXT_LENGTH:
+            raise PollValidationError(f"{label} must be at most {MAX_TEXT_LENGTH} characters.")
         return trimmed
 
     elif field_type == "link":
         if not isinstance(val, str):
             raise PollValidationError(f"{label} must be a link string.")
         trimmed = val.strip()
-        if len(trimmed) > 2000:
-            raise PollValidationError(f"{label} link must be at most 2000 characters.")
+        if len(trimmed) > MAX_LINK_LENGTH:
+            raise PollValidationError(f"{label} link must be at most {MAX_LINK_LENGTH} characters.")
         if " " in trimmed:
             raise PollValidationError(f"{label} link must not contain spaces.")
         if not (trimmed.startswith("http://") or trimmed.startswith("https://")):
@@ -280,8 +290,8 @@ def create_group_field(
         ).all()
     )
 
-    if len(existing_fields) >= 30:
-        raise PollValidationError("A group can have at most 30 fields.")
+    if len(existing_fields) >= MAX_GROUP_FIELDS:
+        raise PollValidationError(f"A group can have at most {MAX_GROUP_FIELDS} fields.")
 
     clean_name, clean_choices, clean_default = validate_field_definition(
         name,

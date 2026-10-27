@@ -11,6 +11,7 @@ import {
   getAdminPollHistory,
   getAdminPollStatus,
   getPollResults,
+  reopenPoll,
 } from '../api/endpoints';
 import { ApiError, getFriendlyErrorMessage } from '../api/client';
 import { getAdmin } from '../lib/adminStorage';
@@ -67,6 +68,11 @@ export const AdminPollPage: React.FC = () => {
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
   const [isClosing, setIsClosing] = useState(false);
   const [closeError, setCloseError] = useState<string | null>(null);
+
+  // Reopen poll confirmation dialog
+  const [showReopenConfirm, setShowReopenConfirm] = useState(false);
+  const [isReopening, setIsReopening] = useState(false);
+  const [reopenError, setReopenError] = useState<string | null>(null);
 
   const loadPollData = useCallback(
     async (pid: string, token: string, silent = false) => {
@@ -209,6 +215,17 @@ export const AdminPollPage: React.FC = () => {
     try {
       await closePoll(pollId, admin.adminToken);
       setShowCloseConfirm(false);
+      setStatusData((prev) =>
+        prev
+          ? {
+              ...prev,
+              poll: {
+                ...prev.poll,
+                status: 'closed',
+              },
+            }
+          : prev,
+      );
       // Immediate refresh after action
       await loadPollData(pollId, admin.adminToken, true);
       if (resultsOpen) {
@@ -218,6 +235,40 @@ export const AdminPollPage: React.FC = () => {
       setCloseError(getFriendlyErrorMessage(err));
     } finally {
       setIsClosing(false);
+    }
+  };
+
+  const handleReopenPoll = async () => {
+    if (!groupId || !pollId) return;
+    const admin = getAdmin(groupId);
+    if (!admin?.adminToken) return;
+
+    setIsReopening(true);
+    setReopenError(null);
+
+    try {
+      await reopenPoll(pollId, admin.adminToken);
+      setShowReopenConfirm(false);
+      setStatusData((prev) =>
+        prev
+          ? {
+              ...prev,
+              poll: {
+                ...prev.poll,
+                status: 'open',
+              },
+            }
+          : prev,
+      );
+      // Immediate refresh after action
+      await loadPollData(pollId, admin.adminToken, true);
+      if (resultsOpen) {
+        await loadResults(pollId, admin.adminToken, true);
+      }
+    } catch (err) {
+      setReopenError(getFriendlyErrorMessage(err));
+    } finally {
+      setIsReopening(false);
     }
   };
 
@@ -1110,11 +1161,13 @@ export const AdminPollPage: React.FC = () => {
           )}
         </Card>
 
-        {/* SECTION 7: Close Poll Action */}
-        {poll.status === 'open' && (
-          <Card className="space-y-3">
-            <h2 className="text-base font-bold text-neutral-900">Manage Poll</h2>
-            {showCloseConfirm ? (
+        {/* SECTION 7: Manage Poll Action (Close / Reopen) */}
+        <Card className="space-y-3">
+          <h2 className="text-base font-bold text-neutral-900">Manage Poll</h2>
+          {closeError && <Banner type="error">{closeError}</Banner>}
+          {reopenError && <Banner type="error">{reopenError}</Banner>}
+          {poll.status === 'open' ? (
+            showCloseConfirm ? (
               <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl space-y-3 text-xs text-rose-950">
                 <p className="font-medium">
                   <strong>Are you sure you want to close this poll?</strong> Votes will be locked
@@ -1146,9 +1199,42 @@ export const AdminPollPage: React.FC = () => {
               >
                 Close Poll
               </Button>
-            )}
-          </Card>
-        )}
+            )
+          ) : (
+            showReopenConfirm ? (
+              <div className="p-3.5 bg-indigo-50 border border-indigo-200 rounded-xl space-y-3 text-xs text-indigo-950">
+                <p className="font-medium">
+                  Members will be able to vote and change their answers again. Their earlier votes and history are kept.
+                </p>
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    loading={isReopening}
+                    onClick={handleReopenPoll}
+                  >
+                    Confirm & Reopen Poll
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setShowReopenConfirm(false)}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <Button
+                variant="outline"
+                fullWidth
+                onClick={() => setShowReopenConfirm(true)}
+              >
+                Reopen poll
+              </Button>
+            )
+          )}
+        </Card>
       </div>
     </div>
   );

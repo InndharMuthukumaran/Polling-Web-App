@@ -5,9 +5,11 @@ import { Button } from '../components/Button';
 import { Banner } from '../components/Banner';
 import { Spinner } from '../components/Spinner';
 import { createPoll, getGroup } from '../api/endpoints';
-import { ApiError, getFriendlyErrorMessage } from '../api/client';
+import { ApiError, getFriendlyErrorMessage, getLimits, getCachedLimits } from '../api/client';
 import { getAdmin } from '../lib/adminStorage';
 import {
+  ROLE_DEFINITIONS,
+  getRoleHelpText,
   toCreatePayload,
   validatePollForm,
   type PollFieldError,
@@ -15,7 +17,7 @@ import {
   type PollFormValues,
   type PollOnlyFieldDraft,
 } from '../lib/pollForm';
-import type { CompletionTimeMode, FieldType, GroupField, PollOptionRole } from '../api/types';
+import type { ApiLimits, FieldType, GroupField, PollOptionRole } from '../api/types';
 
 export const NewPollPage: React.FC = () => {
   const { groupId } = useParams<{ groupId: string }>();
@@ -25,11 +27,12 @@ export const NewPollPage: React.FC = () => {
   const [description, setDescription] = useState('');
   const [allowMultiple, setAllowMultiple] = useState(false);
   const [deadlineLocal, setDeadlineLocal] = useState('');
-  const [completionTimeMode, setCompletionTimeMode] = useState<CompletionTimeMode>('last');
+
+  const [limits, setLimits] = useState<ApiLimits>(getCachedLimits());
 
   const [options, setOptions] = useState<PollFormOption[]>([
-    { label: 'Yes', role: 'target' },
-    { label: 'Not yet', role: 'not_yet' },
+    { label: '', role: 'target' },
+    { label: '', role: 'not_yet' },
   ]);
 
   // Group fields for included columns
@@ -46,6 +49,15 @@ export const NewPollPage: React.FC = () => {
 
   useEffect(() => {
     let mounted = true;
+
+    getLimits()
+      .then((lim) => {
+        if (mounted) {
+          setLimits(lim);
+        }
+      })
+      .catch(() => {});
+
     if (!groupId) {
       setLoadingFields(false);
       return;
@@ -74,28 +86,11 @@ export const NewPollPage: React.FC = () => {
     };
   }, [groupId]);
 
-  // Quick fill handlers
-  const handleQuickFillYesNo = () => {
-    setOptions([
-      { label: 'Yes', role: 'target' },
-      { label: 'Not yet', role: 'not_yet' },
-    ]);
-  };
-
-  const handleQuickFillStages = () => {
-    setOptions([
-      { label: 'Part 1', role: 'in_progress' },
-      { label: 'Part 2', role: 'in_progress' },
-      { label: 'Part 3 completed', role: 'target' },
-    ]);
-  };
-
-  const handleAddExcusedOption = () => {
-    setOptions((prev) => [...prev, { label: 'Need more time', role: 'excused' }]);
-  };
-
   const handleAddRow = () => {
-    setOptions((prev) => [...prev, { label: '', role: 'not_yet' }]);
+    setOptions((prev) => [
+      ...prev,
+      { label: '', role: prev.length === 0 ? 'target' : 'not_yet' },
+    ]);
   };
 
   const handleRemoveRow = (index: number) => {
@@ -118,7 +113,7 @@ export const NewPollPage: React.FC = () => {
 
   // Poll-only questions handlers
   const handleAddPollField = () => {
-    if (pollFields.length >= 15) return;
+    if (pollFields.length >= limits.max_poll_fields) return;
     setPollFields((prev) => [
       ...prev,
       {
@@ -157,7 +152,7 @@ export const NewPollPage: React.FC = () => {
       description,
       allowMultiple,
       deadlineLocal,
-      completionTimeMode,
+      completionTimeMode: 'last',
       options,
       includedFieldIds,
       pollFields,
@@ -275,7 +270,7 @@ export const NewPollPage: React.FC = () => {
             </div>
           </Card>
 
-          {/* CARD 2: Deadline and Completion Time Mode */}
+          {/* CARD 2: Deadline */}
           <Card className="space-y-4">
             <div className="space-y-1">
               <label htmlFor="poll-deadline-input" className="block text-xs font-semibold text-neutral-700">
@@ -291,51 +286,9 @@ export const NewPollPage: React.FC = () => {
                 onChange={(e) => setDeadlineLocal(e.target.value)}
                 className="w-full px-3.5 py-2.5 rounded-xl border border-neutral-300 text-neutral-900 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-600 min-h-[44px]"
               />
-            </div>
-
-            <div className="pt-2 border-t border-neutral-100 space-y-2">
-              <label className="block text-xs font-semibold text-neutral-700">
-                How should the deadline be judged?
-              </label>
-              <div className="space-y-2">
-                <label className="flex items-start gap-2.5 cursor-pointer select-none p-2.5 rounded-xl border border-neutral-200 hover:bg-neutral-50">
-                  <input
-                    type="radio"
-                    name="completion_time_mode"
-                    value="last"
-                    checked={completionTimeMode === 'last'}
-                    onChange={() => setCompletionTimeMode('last')}
-                    className="mt-1 text-indigo-600 focus:ring-indigo-500"
-                  />
-                  <div className="text-xs">
-                    <span className="font-semibold text-neutral-900 block">
-                      When the member settled on the target (their most recent selection). Recommended.
-                    </span>
-                    <span className="text-neutral-500">
-                      Evaluates whether their final target selection was made on time.
-                    </span>
-                  </div>
-                </label>
-
-                <label className="flex items-start gap-2.5 cursor-pointer select-none p-2.5 rounded-xl border border-neutral-200 hover:bg-neutral-50">
-                  <input
-                    type="radio"
-                    name="completion_time_mode"
-                    value="first"
-                    checked={completionTimeMode === 'first'}
-                    onChange={() => setCompletionTimeMode('first')}
-                    className="mt-1 text-indigo-600 focus:ring-indigo-500"
-                  />
-                  <div className="text-xs">
-                    <span className="font-semibold text-neutral-900 block">
-                      The first time they ever selected the target.
-                    </span>
-                    <span className="text-neutral-500">
-                      Evaluates completion the very first time the target option was clicked.
-                    </span>
-                  </div>
-                </label>
-              </div>
+              <p className="text-xs text-neutral-500 leading-relaxed pt-1">
+                A member is on time if they settled on a target option before the deadline (their most recent choice counts). Anyone who finishes later still counts as done and is marked late. The poll is complete only when everyone, except excused members, has reached a target option.
+              </p>
             </div>
           </Card>
 
@@ -347,36 +300,8 @@ export const NewPollPage: React.FC = () => {
                 <span className="text-xs text-neutral-500 font-medium">Minimum 2</span>
               </div>
               <p className="text-xs text-neutral-600">
-                Define the choices. At least one must be designated as the target.
+                Name your options anything you like, and choose what each one means.
               </p>
-            </div>
-
-            {/* Quick-fill button bar */}
-            <div className="flex gap-2 flex-wrap pt-1">
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={handleQuickFillYesNo}
-              >
-                Yes / Not yet
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={handleQuickFillStages}
-              >
-                Stages
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={handleAddExcusedOption}
-              >
-                Add &quot;Need more time&quot; option
-              </Button>
             </div>
 
             {optionsError && <p className="text-xs text-rose-600 font-medium">{optionsError}</p>}
@@ -394,6 +319,7 @@ export const NewPollPage: React.FC = () => {
                     </span>
                     <button
                       type="button"
+                      aria-label={`Remove option ${idx + 1}`}
                       disabled={options.length <= 2}
                       onClick={() => handleRemoveRow(idx)}
                       className="text-xs text-neutral-400 hover:text-rose-600 disabled:opacity-30 disabled:cursor-not-allowed"
@@ -405,24 +331,31 @@ export const NewPollPage: React.FC = () => {
                   <div className="space-y-1.5">
                     <input
                       type="text"
-                      placeholder={`Option label (e.g. Yes, Step 1)`}
+                      placeholder="Option name"
                       value={option.label}
                       onChange={(e) => handleOptionChange(idx, e.target.value, option.role)}
                       className="w-full px-3 py-2 text-sm bg-white rounded-lg border border-neutral-300 focus:outline-none focus:ring-2 focus:ring-indigo-600 min-h-[44px]"
                     />
 
-                    <select
-                      value={option.role}
-                      onChange={(e) =>
-                        handleOptionChange(idx, option.label, e.target.value as PollOptionRole)
-                      }
-                      className="w-full px-3 py-2 text-xs bg-white rounded-lg border border-neutral-300 focus:outline-none focus:ring-2 focus:ring-indigo-600 min-h-[44px]"
-                    >
-                      <option value="target">Target (counts as done)</option>
-                      <option value="in_progress">In progress</option>
-                      <option value="excused">Needs more time / excused</option>
-                      <option value="not_yet">Not yet</option>
-                    </select>
+                    <div>
+                      <select
+                        aria-label={`Option ${idx + 1} role`}
+                        value={option.role}
+                        onChange={(e) =>
+                          handleOptionChange(idx, option.label, e.target.value as PollOptionRole)
+                        }
+                        className="w-full px-3 py-2 text-xs bg-white rounded-lg border border-neutral-300 focus:outline-none focus:ring-2 focus:ring-indigo-600 min-h-[44px]"
+                      >
+                        {ROLE_DEFINITIONS.map((r) => (
+                          <option key={r.value} value={r.value}>
+                            {r.label}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="text-[11px] text-neutral-500 mt-1">
+                        {getRoleHelpText(option.role)}
+                      </p>
+                    </div>
                   </div>
                 </div>
               ))}
@@ -514,7 +447,7 @@ export const NewPollPage: React.FC = () => {
                   Questions for members (optional)
                 </h2>
                 <span className="text-xs text-neutral-500 font-medium">
-                  {pollFields.length} / 15
+                  {pollFields.length} / {limits.max_poll_fields}
                 </span>
               </div>
               <p className="text-xs text-neutral-600">
@@ -698,7 +631,7 @@ export const NewPollPage: React.FC = () => {
               variant="outline"
               size="md"
               fullWidth
-              disabled={pollFields.length >= 15}
+              disabled={pollFields.length >= limits.max_poll_fields}
               onClick={handleAddPollField}
             >
               + Add question

@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, getFriendlyErrorMessage, normalizeBaseUrl, request } from './client';
+import {
+  ApiError,
+  DEFAULT_LIMITS,
+  getCachedLimits,
+  getFriendlyErrorMessage,
+  getLimits,
+  normalizeBaseUrl,
+  request,
+  _resetLimitsCache,
+} from './client';
 
 describe('client.ts', () => {
   beforeEach(() => {
@@ -253,6 +262,58 @@ describe('client.ts', () => {
     expect(normalizeBaseUrl('')).toBe('http://localhost:8000');
     expect(normalizeBaseUrl(undefined)).toBe('http://localhost:8000');
     expect(normalizeBaseUrl('https://api.onrender.com//')).toBe('https://api.onrender.com/');
+  });
+
+  describe('getLimits', () => {
+    beforeEach(() => {
+      _resetLimitsCache();
+    });
+
+    it('fetches limits from /api/v1/limits, caches the result, and does not fetch again', async () => {
+      const customLimits = {
+        max_group_fields: 100,
+        max_poll_fields: 50,
+        max_choices: 200,
+        min_choices: 2,
+        max_text_length: 500,
+        max_import_rows: 5000,
+        max_import_columns: 120,
+        max_import_file_bytes: 5242880,
+        max_members_per_request: 5000,
+      };
+
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => customLimits,
+      });
+      vi.stubGlobal('fetch', mockFetch);
+
+      const limits1 = await getLimits();
+      expect(limits1).toEqual(customLimits);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+
+      // Second call uses cached limits
+      const limits2 = await getLimits();
+      expect(limits2).toEqual(customLimits);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+
+      // getCachedLimits returns cached value
+      expect(getCachedLimits()).toEqual(customLimits);
+    });
+
+    it('falls back to DEFAULT_LIMITS when the request fails', async () => {
+      const mockFetch = vi.fn().mockRejectedValue(new Error('Network error'));
+      vi.stubGlobal('fetch', mockFetch);
+
+      const limits = await getLimits();
+      expect(limits).toEqual(DEFAULT_LIMITS);
+      expect(limits.max_group_fields).toBe(100);
+      expect(limits.max_poll_fields).toBe(50);
+      expect(limits.max_choices).toBe(200);
+      expect(limits.min_choices).toBe(2);
+      expect(limits.max_import_rows).toBe(5000);
+    });
   });
 });
 

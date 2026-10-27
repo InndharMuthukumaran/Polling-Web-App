@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
-import type { CreateFieldPayload, FieldType, GroupField, GroupMember, UpdateFieldPayload } from '../../api/types';
+import React, { useEffect, useState } from 'react';
+import type { ApiLimits, CreateFieldPayload, FieldType, GroupField, GroupMember, UpdateFieldPayload } from '../../api/types';
 import { createField, deleteField, updateField } from '../../api/endpoints';
-import { ApiError, getFriendlyErrorMessage } from '../../api/client';
+import { ApiError, getFriendlyErrorMessage, getLimits, getCachedLimits } from '../../api/client';
 import { Button } from '../Button';
 import { Card } from '../Card';
 import { Banner } from '../Banner';
@@ -21,6 +21,19 @@ export const FieldsTab: React.FC<FieldsTabProps> = ({
   members,
   onRefresh,
 }) => {
+  // Limits State
+  const [limits, setLimits] = useState<ApiLimits>(getCachedLimits());
+
+  useEffect(() => {
+    let isMounted = true;
+    getLimits().then((l) => {
+      if (isMounted) setLimits(l);
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
   // Add Field State
   const [isAdding, setIsAdding] = useState(false);
   const [addName, setAddName] = useState('');
@@ -96,8 +109,13 @@ export const FieldsTab: React.FC<FieldsTabProps> = ({
         .split('\n')
         .map((c) => c.trim())
         .filter(Boolean);
-      if (choices.length < 2) {
-        setAddError('Choice fields must have at least 2 choices.');
+      if (choices.length < limits.min_choices) {
+        setAddError(`Choice fields must have at least ${limits.min_choices} choices.`);
+        setAddLoading(false);
+        return;
+      }
+      if (choices.length > limits.max_choices) {
+        setAddError(`A choice field can have at most ${limits.max_choices} choices.`);
         setAddLoading(false);
         return;
       }
@@ -139,8 +157,13 @@ export const FieldsTab: React.FC<FieldsTabProps> = ({
         .split('\n')
         .map((c) => c.trim())
         .filter(Boolean);
-      if (choices.length < 2) {
-        setEditError('Choice fields must have at least 2 choices.');
+      if (choices.length < limits.min_choices) {
+        setEditError(`Choice fields must have at least ${limits.min_choices} choices.`);
+        setEditLoading(false);
+        return;
+      }
+      if (choices.length > limits.max_choices) {
+        setEditError(`A choice field can have at most ${limits.max_choices} choices.`);
         setEditLoading(false);
         return;
       }
@@ -229,9 +252,16 @@ export const FieldsTab: React.FC<FieldsTabProps> = ({
 
       {/* Field List & Add Button Header */}
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-base font-bold text-neutral-900">Group Fields ({fields.length})</h2>
+        <h2 className="text-base font-bold text-neutral-900">
+          Group Fields ({fields.length} / {limits.max_group_fields})
+        </h2>
         {!isAdding && (
-          <Button size="sm" variant="primary" onClick={() => setIsAdding(true)}>
+          <Button
+            size="sm"
+            variant="primary"
+            onClick={() => setIsAdding(true)}
+            disabled={fields.length >= limits.max_group_fields}
+          >
             Add field
           </Button>
         )}

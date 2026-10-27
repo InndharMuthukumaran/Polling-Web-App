@@ -1,4 +1,50 @@
-import type { ApiErrorEnvelope, ApiErrorRowDetail } from './types';
+import type { ApiErrorEnvelope, ApiErrorRowDetail, ApiLimits } from './types';
+
+export const DEFAULT_LIMITS: ApiLimits = {
+  max_group_fields: 100,
+  max_poll_fields: 50,
+  max_choices: 200,
+  min_choices: 2,
+  max_text_length: 500,
+  max_import_rows: 5000,
+  max_import_columns: 120,
+  max_import_file_bytes: 5 * 1024 * 1024,
+  max_members_per_request: 5000,
+};
+
+let limitsCache: ApiLimits | null = null;
+let limitsPromise: Promise<ApiLimits> | null = null;
+
+export async function getLimits(): Promise<ApiLimits> {
+  if (limitsCache) {
+    return limitsCache;
+  }
+  if (limitsPromise) {
+    return limitsPromise;
+  }
+  limitsPromise = request<ApiLimits>('/api/v1/limits')
+    .then((data) => {
+      limitsCache = data;
+      return data;
+    })
+    .catch(() => {
+      limitsCache = { ...DEFAULT_LIMITS };
+      return limitsCache;
+    })
+    .finally(() => {
+      limitsPromise = null;
+    });
+  return limitsPromise;
+}
+
+export function getCachedLimits(): ApiLimits {
+  return limitsCache ?? DEFAULT_LIMITS;
+}
+
+export function _resetLimitsCache(): void {
+  limitsCache = null;
+  limitsPromise = null;
+}
 
 export class ApiError extends Error {
   readonly status: number;

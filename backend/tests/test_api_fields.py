@@ -3,6 +3,8 @@
 import uuid
 import pytest
 
+from app.limits import MAX_MEMBERS_PER_REQUEST
+
 
 def test_field_endpoints_crud_and_auth(client):
     """
@@ -181,14 +183,14 @@ def test_members_bulk_api_validation_and_row_details(client):
     )
     assert res.status_code == 422
 
-    # 3. More than 2000 rows -> 422
+    # 3. More than members per request limit -> 422
     res = client.post(
         f"/api/v1/groups/{gid}/members",
         headers={"X-Admin-Token": token},
-        json={"display_names": [f"Member {i}" for i in range(2001)]},
+        json={"display_names": [f"Member {i}" for i in range(MAX_MEMBERS_PER_REQUEST + 1)]},
     )
     assert res.status_code == 422
-    assert "2000" in res.json()["error"]["message"]
+    assert str(MAX_MEMBERS_PER_REQUEST) in res.json()["error"]["message"]
 
     # 4. Bad row in members returns 422 with row-level details
     res = client.post(

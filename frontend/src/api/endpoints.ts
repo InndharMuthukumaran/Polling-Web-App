@@ -389,6 +389,21 @@ export async function closePoll(
   );
 }
 
+export async function reopenPoll(
+  pollId: string,
+  adminToken: string,
+): Promise<{ status: string }> {
+  return request<{ status: string }>(
+    `/api/v1/polls/${encodeURIComponent(pollId)}/reopen`,
+    {
+      method: 'POST',
+      adminToken,
+    },
+  );
+}
+
+export { getLimits, getCachedLimits } from './client';
+
 export async function getPollResults(
   pollId: string,
   adminToken: string,

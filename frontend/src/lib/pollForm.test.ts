@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { GroupField } from '../api/types';
 import {
+  ROLE_DEFINITIONS,
+  getRoleHelpText,
   toCreatePayload,
   validatePollForm,
   type PollFormValues,
@@ -243,7 +245,7 @@ describe('pollForm.ts', () => {
       const errors1 = validatePollForm({ ...baseValidValues, pollFields });
       expect(errors1).toContainEqual({
         field: 'pollFields.0.choices',
-        message: 'Choice questions require 2 to 50 unique choices.',
+        message: 'Choice questions require 2 to 200 unique choices.',
       });
 
       const pollFieldsDup: PollOnlyFieldDraft[] = [
@@ -313,8 +315,8 @@ describe('pollForm.ts', () => {
       });
     });
 
-    it('fails when more than 15 poll-only fields are added', () => {
-      const pollFields: PollOnlyFieldDraft[] = Array.from({ length: 16 }, (_, i) => ({
+    it('fails when more than 50 poll-only fields are added', () => {
+      const pollFields: PollOnlyFieldDraft[] = Array.from({ length: 51 }, (_, i) => ({
         id: `field-${i}`,
         name: `Question ${i + 1}`,
         field_type: 'text',
@@ -326,7 +328,7 @@ describe('pollForm.ts', () => {
       const errors = validatePollForm({ ...baseValidValues, pollFields });
       expect(errors).toContainEqual({
         field: 'pollFields',
-        message: 'A poll can have at most 15 poll-only fields.',
+        message: 'A poll can have at most 50 poll-only fields.',
       });
     });
   });
@@ -358,7 +360,7 @@ describe('pollForm.ts', () => {
 
       expect(payload.deadline).toBeNull();
       expect(payload.description_raw).toBeNull();
-      expect(payload.completion_time_mode).toBe('first');
+      expect(payload.completion_time_mode).toBe('last');
     });
 
     it('excludes identifier field from included_field_ids and omits key when empty', () => {
@@ -425,6 +427,45 @@ describe('pollForm.ts', () => {
           field_type: 'link',
         },
       ]);
+    });
+  });
+
+  describe('role definitions and help texts', () => {
+    it('defines the 4 roles in the expected order with plain names and descriptions', () => {
+      expect(ROLE_DEFINITIONS).toEqual([
+        {
+          value: 'target',
+          label: 'Target',
+          helpText: 'Counts as done. The poll is complete when everyone has reached a target option.',
+        },
+        {
+          value: 'in_progress',
+          label: 'In progress',
+          helpText: 'Voted, but not done yet. Shown as behind.',
+        },
+        {
+          value: 'not_yet',
+          label: 'Not yet',
+          helpText: 'Said they have not done it. Shown as behind.',
+        },
+        {
+          value: 'excused',
+          label: 'Excused / needs more time',
+          helpText: 'Not counted as behind, and does not block the poll from being complete.',
+        },
+      ]);
+    });
+
+    it('returns the right help text for each role', () => {
+      expect(getRoleHelpText('target')).toBe(
+        'Counts as done. The poll is complete when everyone has reached a target option.',
+      );
+      expect(getRoleHelpText('in_progress')).toBe('Voted, but not done yet. Shown as behind.');
+      expect(getRoleHelpText('not_yet')).toBe('Said they have not done it. Shown as behind.');
+      expect(getRoleHelpText('excused')).toBe(
+        'Not counted as behind, and does not block the poll from being complete.',
+      );
+      expect(getRoleHelpText('unknown')).toBe('');
     });
   });
 });

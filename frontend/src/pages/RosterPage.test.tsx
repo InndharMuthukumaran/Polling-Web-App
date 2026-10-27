@@ -182,6 +182,34 @@ describe('RosterPage', () => {
         expect(screen.getByText(/Bob Smith has blank value/i)).toBeInTheDocument();
       });
     });
+
+    it('shows field cap "N / 100" and disables "Add field" button when reaching the cap', async () => {
+      const capFields: GroupField[] = Array.from({ length: 100 }, (_, i) => ({
+        id: `f-${i}`,
+        key: `field_${i}`,
+        name: `Field ${i + 1}`,
+        field_type: 'text',
+        is_required: false,
+        default_value: null,
+        choices: null,
+        is_identifier: i === 0,
+        position: i + 1,
+      }));
+
+      vi.mocked(endpoints.getGroup).mockResolvedValueOnce({
+        ...mockGroup,
+        fields: capFields,
+      });
+
+      renderRoster('fields');
+
+      await waitFor(() => {
+        expect(screen.getByText('Group Fields (100 / 100)')).toBeInTheDocument();
+      });
+
+      const addBtn = screen.getByRole('button', { name: /Add field/i });
+      expect(addBtn).toBeDisabled();
+    });
   });
 
   describe('Members Tab', () => {

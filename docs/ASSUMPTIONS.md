@@ -835,6 +835,70 @@ This section documents assumptions, choices, and architectural decisions made fo
   4. Web root `GET /` and SPA deep-link `GET /p/<id>` return 200 HTML (executed when `--web` is supplied).
   5. API group and member creation flow: creates group `SMOKE TEST (safe to delete)` (201), adds a member (201), fetches join info (200), and confirms member lookup returns 404 for an unknown identifier.
 
+# Assumptions and Design Decisions (Part FA: Simpler Poll Form, Higher Limits, Reopening Closed Polls)
+
+This section documents the assumptions, choices, and architectural decisions made for Part FA.
+
+## 1. Poll Form Simplification (`frontend/src/pages/NewPollPage.tsx` & `lib/pollForm.ts`)
+- **Completion Time Mode**:
+  - The radio group for selecting the deadline judgment mode ("How should the deadline be judged?") was removed.
+  - The form always submits `completion_time_mode: "last"` explicitly. The backend continues to accept `"first"` for compatibility, but the web UI no longer offers it.
+  - Next to the deadline picker, a muted explanatory note is rendered: `"A member is on time if they settled on a target option before the deadline (their most recent choice counts). Anyone who finishes later still counts as done and is marked late. The poll is complete only when everyone, except excused members, has reached a target option."`
+- **Removed Quick-Fills**:
+  - The three preset buttons ("Yes / Not yet", "Stages", "Add 'Need more time' option") and their handlers were removed.
+- **Dynamic Options Editor**:
+  - The form initializes with two empty rows with input placeholder `"Option name"`.
+  - Roles default to `"target"` for the first row and `"not_yet"` for all subsequent rows.
+  - Role dropdown provides plain labels in exact order:
+    1. `"Target"` (`target`): `"Counts as done. The poll is complete when everyone has reached a target option."`
+    2. `"In progress"` (`in_progress`): `"Voted, but not done yet. Shown as behind."`
+    3. `"Not yet"` (`not_yet`): `"Said they have not done it. Shown as behind."`
+    4. `"Excused / needs more time"` (`excused`): `"Not counted as behind, and does not block the poll from being complete."`
+  - A short help line below the dropdown dynamically explains the currently selected role.
+  - Users can freely add and remove option rows (minimum 2 enforced by disabling the remove button when 2 rows remain; no artificial maximum in UI).
+  - Explanatory header line above the options editor: `"Name your options anything you like, and choose what each one means."`
+
+## 2. Limits From One Source (`backend/app/limits.py` & Frontend Limits Helper)
+- **Central Constants**:
+  - `backend/app/limits.py` defines all application caps as named constants:
+    - `MAX_GROUP_FIELDS = 100` (raised from 30)
+    - `MAX_POLL_FIELDS = 50` (raised from 15)
+    - `MAX_CHOICES = 200` (raised from 50; `MIN_CHOICES = 2`)
+    - `MAX_CHOICE_LENGTH = 100` (unchanged)
+    - `MAX_TEXT_LENGTH = 500` (unchanged)
+    - `MAX_LINK_LENGTH = 2000` (unchanged)
+    - `MAX_IMPORT_ROWS = 5000` (raised from 2000)
+    - `MAX_IMPORT_COLUMNS = 120` (raised from 60)
+    - `MAX_IMPORT_FILE_BYTES = 5 * 1024 * 1024` (5 MB, unchanged)
+    - `MAX_IMPORT_UNCOMPRESSED_BYTES = 50 * 1024 * 1024` (50 MB, unchanged)
+    - `MAX_IMPORT_ERROR_DETAILS = 100` (unchanged)
+    - `MAX_MEMBERS_PER_REQUEST = 5000` (raised from 2000)
+  - All services and route schemas interpolate these constants into error messages (no literal limits hardcoded).
+- **Public Limits Endpoint**:
+  - `GET /api/v1/limits` requires no authentication and returns JSON with keys:
+    `max_group_fields`, `max_poll_fields`, `max_choices`, `min_choices`, `max_text_length`, `max_import_rows`, `max_import_columns`, `max_import_file_bytes`, `max_members_per_request`.
+- **Frontend Integration**:
+  - `getLimits()` in `frontend/src/api/client.ts` caches the result at module level and falls back to `DEFAULT_LIMITS` on failure.
+  - `getCachedLimits()` allows synchronous access to the cached or default limits.
+  - Dynamic limits govern:
+    - Poll form question counter and cap (`"N / 50"`).
+    - Roster Fields tab counter (`"Group Fields (N / 100)"`) and disabled state of the `"Add field"` button at 100 fields.
+    - Choice count validation in group field choice editors and poll question choice editors (2 to 200 choices).
+    - Browser-side spreadsheet file size check in the import wizard (`5 MB`).
+
+## 3. Reopening Closed Polls (`AdminPollPage.tsx` & `backend/app/services/polls.py`)
+- **Backend Service & Route**:
+  - `reopen_poll(session, poll_id, now=None)` locks the `Poll` row using `populate_existing=True`, sets `status = 'open'` and `closed_at = None`, and commits.
+  - Reopening a poll that is already open is idempotent and harmless (returns the existing record without raising errors).
+  - Votes, history records, and poll answers remain intact.
+  - Endpoint `POST /api/v1/polls/{poll_id}/reopen` enforces group creator authentication (`require_admin_for_poll`), matching `close_poll` semantics and returning `PollDetailResponse`.
+  - Once reopened, members can vote, change selections, and submit answers again. The `all_reached` state is dynamically recomputed.
+- **Frontend UI (`AdminPollPage.tsx`)**:
+  - When the poll is closed, the Manage section displays a `"Reopen poll"` button.
+  - Clicking triggers confirmation: `"Members will be able to vote and change their answers again. Their earlier votes and history are kept."`.
+  - Confirming calls `POST /api/v1/polls/{poll_id}/reopen` and updates the page state (status badge, banner, buttons) in place without requiring a manual reload.
+
+
 
 
 

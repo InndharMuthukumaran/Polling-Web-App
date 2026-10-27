@@ -26,6 +26,7 @@ from app.errors import (
     PollNotFoundError,
     PollValidationError,
 )
+from app.limits import MAX_POLL_FIELDS, MIN_CHOICES
 from app.models import (
     Group,
     GroupField,
@@ -247,8 +248,8 @@ def create_poll(
     if not name or not name.strip():
         raise PollValidationError("Poll name cannot be empty.")
 
-    if len(options) < 2:
-        raise PollValidationError("A poll must have at least 2 options.")
+    if len(options) < MIN_CHOICES:
+        raise PollValidationError(f"A poll must have at least {MIN_CHOICES} options.")
 
     if completion_time_mode not in VALID_COMPLETION_MODES:
         raise PollValidationError(
@@ -286,8 +287,8 @@ def create_poll(
     # 3. Poll-only fields validation
     validated_poll_fields: list[dict[str, Any]] = []
     if poll_fields:
-        if len(poll_fields) > 15:
-            raise PollValidationError("A poll can have at most 15 poll-only fields.")
+        if len(poll_fields) > MAX_POLL_FIELDS:
+            raise PollValidationError(f"A poll can have at most {MAX_POLL_FIELDS} poll-only fields.")
 
         seen_poll_names: set[str] = set()
         existing_poll_keys: set[str] = set()
@@ -443,7 +444,9 @@ def close_poll(
 ) -> Poll:
     """Close an open poll. Closing an already closed poll is a no-op."""
     pid = resolve_uuid(poll_id)
-    poll = session.get(Poll, pid)
+    poll = session.scalar(
+        select(Poll).where(Poll.id == pid).with_for_update().execution_options(populate_existing=True)
+    )
     if not poll:
         raise PollNotFoundError(f"Poll {pid} not found.")
 
@@ -453,6 +456,29 @@ def close_poll(
     close_time = ensure_utc(now) or datetime.now(timezone.utc)
     poll.status = "closed"
     poll.closed_at = close_time
+    session.commit()
+    session.refresh(poll)
+    return poll
+
+
+def reopen_poll(
+    session: Session,
+    poll_id: uuid.UUID | str,
+    now: datetime | None = None,
+) -> Poll:
+    """Reopen a closed poll. Reopening an already open poll is a no-op."""
+    pid = resolve_uuid(poll_id)
+    poll = session.scalar(
+        select(Poll).where(Poll.id == pid).with_for_update().execution_options(populate_existing=True)
+    )
+    if not poll:
+        raise PollNotFoundError(f"Poll {pid} not found.")
+
+    if poll.status == "open":
+        return poll
+
+    poll.status = "open"
+    poll.closed_at = None
     session.commit()
     session.refresh(poll)
     return poll

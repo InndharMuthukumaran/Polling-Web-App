@@ -21,6 +21,13 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.errors import GroupNotFoundError, PollValidationError
+from app.limits import (
+    MAX_IMPORT_COLUMNS,
+    MAX_IMPORT_ERROR_DETAILS,
+    MAX_IMPORT_FILE_BYTES,
+    MAX_IMPORT_ROWS,
+    MAX_IMPORT_UNCOMPRESSED_BYTES,
+)
 from app.models import Group, GroupField, Member
 from app.services.fields import (
     create_group_field,
@@ -31,28 +38,28 @@ from app.services.fields import (
 )
 from app.services.identity import add_members_bulk, resolve_uuid
 
-MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
-MAX_UNCOMPRESSED_SIZE = 50 * 1024 * 1024  # 50 MB
-MAX_DATA_ROWS = 2000
-MAX_COLUMNS = 60
-MAX_ERROR_DETAILS = 100
+MAX_FILE_SIZE = MAX_IMPORT_FILE_BYTES
+MAX_UNCOMPRESSED_SIZE = MAX_IMPORT_UNCOMPRESSED_BYTES
+MAX_DATA_ROWS = MAX_IMPORT_ROWS
+MAX_COLUMNS = MAX_IMPORT_COLUMNS
+MAX_ERROR_DETAILS = MAX_IMPORT_ERROR_DETAILS
 
 
-def read_upload_capped(file: Any, max_bytes: int = MAX_FILE_SIZE) -> bytes:
+def read_upload_capped(file: Any, max_bytes: int = MAX_IMPORT_FILE_BYTES) -> bytes:
     """Read at most max_bytes + 1 bytes from an uploaded file.
 
     Raises 422 PollValidationError without reading further if upload exceeds max_bytes.
     """
     content = file.file.read(max_bytes + 1)
     if len(content) > max_bytes:
-        raise PollValidationError("File size exceeds 5 MB limit.")
+        raise PollValidationError(f"File size exceeds {MAX_IMPORT_FILE_BYTES // (1024 * 1024)} MB limit.")
     return content
 
 
 def validate_file_type_and_size(filename: str, content: bytes) -> str:
     """Validate file size, extension, and signature. Returns 'xlsx' or 'csv'."""
-    if len(content) > MAX_FILE_SIZE:
-        raise PollValidationError("File size exceeds 5 MB limit.")
+    if len(content) > MAX_IMPORT_FILE_BYTES:
+        raise PollValidationError(f"File size exceeds {MAX_IMPORT_FILE_BYTES // (1024 * 1024)} MB limit.")
 
     fname_lower = filename.lower()
     if fname_lower.endswith(".xls") or fname_lower.endswith(".xlsm"):
@@ -72,8 +79,8 @@ def validate_file_type_and_size(filename: str, content: bytes) -> str:
         try:
             zf = zipfile.ZipFile(io.BytesIO(content))
             uncompressed_size = sum(info.file_size for info in zf.infolist())
-            if uncompressed_size > MAX_UNCOMPRESSED_SIZE:
-                raise PollValidationError("Uncompressed file size exceeds 50 MB limit.")
+            if uncompressed_size > MAX_IMPORT_UNCOMPRESSED_BYTES:
+                raise PollValidationError(f"Uncompressed file size exceeds {MAX_IMPORT_UNCOMPRESSED_BYTES // (1024 * 1024)} MB limit.")
         except zipfile.BadZipFile:
             raise PollValidationError("Invalid file content. Corrupted or invalid .xlsx file.")
 
@@ -188,8 +195,8 @@ def parse_raw_spreadsheet(
         raise PollValidationError("The file contains no headers.")
 
     active_headers_raw = header_cells[: last_col + 1]
-    if len(active_headers_raw) > MAX_COLUMNS:
-        raise PollValidationError("File contains more than the maximum limit of 60 columns.")
+    if len(active_headers_raw) > MAX_IMPORT_COLUMNS:
+        raise PollValidationError(f"File contains more than the maximum limit of {MAX_IMPORT_COLUMNS} columns.")
 
     headers: list[str] = []
     seen_headers: dict[str, int] = {}
@@ -214,9 +221,9 @@ def parse_raw_spreadsheet(
         padded = cells[: len(headers)] + [None] * max(0, len(headers) - len(cells))
         data_rows.append((sheet_row_num, padded))
 
-    if len(data_rows) > MAX_DATA_ROWS:
+    if len(data_rows) > MAX_IMPORT_ROWS:
         raise PollValidationError(
-            f"File contains more than the maximum limit of {MAX_DATA_ROWS} data rows."
+            f"File contains more than the maximum limit of {MAX_IMPORT_ROWS} data rows."
         )
 
     return sheet_name, headers, data_rows
@@ -568,7 +575,7 @@ def execute_spreadsheet_import(
             if err_count > 1
             else errors[0]["message"]
         )
-        raise PollValidationError(top_msg, details=errors[:MAX_ERROR_DETAILS])
+        raise PollValidationError(top_msg, details=errors[:MAX_IMPORT_ERROR_DETAILS])
 
     rows_added = len(members_to_add_data)
 

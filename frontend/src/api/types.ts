@@ -401,3 +401,16 @@ export interface AdminGroupStorageData {
   groupName: string;
 }
 
+export interface ApiLimits {
+  max_group_fields: number;
+  max_poll_fields: number;
+  max_choices: number;
+  min_choices: number;
+  max_text_length: number;
+  max_import_rows: number;
+  max_import_columns: number;
+  max_import_file_bytes: number;
+  max_members_per_request: number;
+}
+
+

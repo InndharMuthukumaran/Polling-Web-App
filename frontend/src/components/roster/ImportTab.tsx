@@ -1,11 +1,11 @@
-import React, { useState } from 'react';
-import type { FieldType, GroupField, GroupMember, ImportPreviewResponse, ImportResultResponse } from '../../api/types';
+import React, { useEffect, useState } from 'react';
+import type { ApiLimits, FieldType, GroupField, GroupMember, ImportPreviewResponse, ImportResultResponse } from '../../api/types';
 import {
   downloadMemberTemplate,
   importMembers,
   previewMemberImport,
 } from '../../api/endpoints';
-import { ApiError, getFriendlyErrorMessage } from '../../api/client';
+import { ApiError, getFriendlyErrorMessage, getLimits, getCachedLimits } from '../../api/client';
 import { buildImportRequest, type ColumnChoice } from '../../lib/importMapping';
 import { Button } from '../Button';
 import { Card } from '../Card';
@@ -29,6 +29,21 @@ export const ImportTab: React.FC<ImportTabProps> = ({
   onSwitchToMembers,
 }) => {
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
+
+  // Limits state
+  const [limits, setLimits] = useState<ApiLimits>(getCachedLimits());
+
+  useEffect(() => {
+    let isMounted = true;
+    getLimits().then((l) => {
+      if (isMounted) setLimits(l);
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const maxMb = Math.round(limits.max_import_file_bytes / (1024 * 1024));
 
   // File state
   const [file, setFile] = useState<File | null>(null);
@@ -92,8 +107,8 @@ export const ImportTab: React.FC<ImportTabProps> = ({
       return;
     }
 
-    if (selected.size > 5 * 1024 * 1024) {
-      setFileError('File size exceeds the 5 MB limit. Please select a smaller file.');
+    if (selected.size > limits.max_import_file_bytes) {
+      setFileError(`File size exceeds the ${maxMb} MB limit. Please select a smaller file.`);
       return;
     }
 
@@ -330,7 +345,7 @@ export const ImportTab: React.FC<ImportTabProps> = ({
           {/* File Picker */}
           <div className="space-y-2 pt-2 border-t border-neutral-100">
             <label htmlFor="spreadsheet-file-input" className="block text-xs font-semibold text-neutral-700">
-              Select Excel (.xlsx) or CSV (.csv) file (Max 5 MB)
+              Select Excel (.xlsx) or CSV (.csv) file (Max {maxMb} MB)
             </label>
             <input
               id="spreadsheet-file-input"

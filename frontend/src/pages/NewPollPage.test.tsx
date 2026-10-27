@@ -73,32 +73,75 @@ describe('NewPollPage', () => {
     );
   };
 
-  it('quick-fill buttons fill the options properly', async () => {
+  it('options editor starts with two empty rows, defaults roles, shows help text, allows adding/removing, and deadline note is present without mode radio group', async () => {
     saveAdmin('grp-abc', { adminToken: 'token-abc', groupName: 'Test Group' });
     renderNewPollPage('grp-abc');
 
-    // Click "Stages"
-    const stagesBtn = screen.getByRole('button', { name: /Stages/i });
-    await userEvent.click(stagesBtn);
+    // Muted note next to deadline is present
+    expect(
+      screen.getByText(
+        /A member is on time if they settled on a target option before the deadline \(their most recent choice counts\)\./i,
+      ),
+    ).toBeInTheDocument();
 
-    expect(screen.getByDisplayValue('Part 1')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('Part 2')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('Part 3 completed')).toBeInTheDocument();
+    // Radio group for deadline completion mode is NOT present
+    expect(
+      screen.queryByText(/How should the deadline be judged\?/i),
+    ).not.toBeInTheDocument();
 
-    // Click "Yes / Not yet"
-    const yesNoBtn = screen.getByRole('button', { name: /Yes \/ Not yet/i });
-    await userEvent.click(yesNoBtn);
+    // Header line above options editor
+    expect(
+      screen.getByText(
+        'Name your options anything you like, and choose what each one means.',
+      ),
+    ).toBeInTheDocument();
 
-    expect(screen.getByDisplayValue('Yes')).toBeInTheDocument();
-    expect(screen.getAllByDisplayValue('Not yet').length).toBeGreaterThanOrEqual(1);
+    // Two empty option rows
+    const optionInputs = screen.getAllByPlaceholderText('Option name');
+    expect(optionInputs).toHaveLength(2);
+    expect(optionInputs[0]).toHaveValue('');
+    expect(optionInputs[1]).toHaveValue('');
 
-    // Click "Add 'Need more time' option"
-    const needMoreTimeBtn = screen.getByRole('button', {
-      name: /Add "Need more time" option/i,
-    });
-    await userEvent.click(needMoreTimeBtn);
+    // Role dropdowns
+    const roleSelects = screen.getAllByRole('combobox', { name: /Option \d+ role/i });
+    expect(roleSelects).toHaveLength(2);
+    expect(roleSelects[0]).toHaveValue('target');
+    expect(roleSelects[1]).toHaveValue('not_yet');
 
-    expect(screen.getByDisplayValue('Need more time')).toBeInTheDocument();
+    // Role help texts
+    expect(
+      screen.getByText(
+        'Counts as done. The poll is complete when everyone has reached a target option.',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Said they have not done it. Shown as behind.'),
+    ).toBeInTheDocument();
+
+    // Changing second role to "In progress" updates help text
+    await userEvent.selectOptions(roleSelects[1], 'in_progress');
+    expect(roleSelects[1]).toHaveValue('in_progress');
+    expect(
+      screen.getByText('Voted, but not done yet. Shown as behind.'),
+    ).toBeInTheDocument();
+
+    // Adding an option row adds a row defaulting to not_yet
+    const addOptionBtn = screen.getByRole('button', { name: /\+ Add (another )?option/i });
+    await userEvent.click(addOptionBtn);
+
+    const updatedOptionInputs = screen.getAllByPlaceholderText('Option name');
+    expect(updatedOptionInputs).toHaveLength(3);
+
+    const updatedRoleSelects = screen.getAllByRole('combobox', { name: /Option \d+ role/i });
+    expect(updatedRoleSelects).toHaveLength(3);
+    expect(updatedRoleSelects[2]).toHaveValue('not_yet');
+
+    // Remove third option row
+    const removeButtons = screen.getAllByRole('button', { name: /Remove option/i });
+    expect(removeButtons).toHaveLength(3);
+    await userEvent.click(removeButtons[2]);
+
+    expect(screen.getAllByPlaceholderText('Option name')).toHaveLength(2);
   });
 
   it('an invalid form shows validation errors and does not call createPoll', async () => {
@@ -173,14 +216,14 @@ describe('NewPollPage', () => {
     renderNewPollPage('grp-abc');
 
     await waitFor(() => {
-      expect(screen.getByText('0 / 15')).toBeInTheDocument();
+      expect(screen.getByText('0 / 50')).toBeInTheDocument();
     });
 
     // Click "+ Add question"
     const addQuestionBtn = screen.getByRole('button', { name: /\+ Add question/i });
     await userEvent.click(addQuestionBtn);
 
-    expect(screen.getByText('1 / 15')).toBeInTheDocument();
+    expect(screen.getByText('1 / 50')).toBeInTheDocument();
     expect(screen.getByText('Question 1')).toBeInTheDocument();
     expect(
       screen.getByPlaceholderText(/e\.g\. Expected CTC, T-Shirt Size, GitHub Profile/i),
@@ -190,7 +233,7 @@ describe('NewPollPage', () => {
     const removeBtn = screen.getByRole('button', { name: /Remove question/i });
     await userEvent.click(removeBtn);
 
-    expect(screen.getByText('0 / 15')).toBeInTheDocument();
+    expect(screen.getByText('0 / 50')).toBeInTheDocument();
     expect(screen.queryByText('Question 1')).not.toBeInTheDocument();
   });
 
@@ -222,6 +265,11 @@ describe('NewPollPage', () => {
     // Enter poll name
     const nameInput = screen.getByLabelText(/^Poll Name/i);
     await userEvent.type(nameInput, 'Project Demo');
+
+    // Fill option names
+    const optionInputs = screen.getAllByPlaceholderText('Option name');
+    await userEvent.type(optionInputs[0], 'Yes');
+    await userEvent.type(optionInputs[1], 'Not yet');
 
     // Enter description
     const descInput = screen.getByLabelText(/Description/i);
@@ -289,6 +337,11 @@ describe('NewPollPage', () => {
 
     const nameInput = screen.getByLabelText(/Poll Name/i);
     await userEvent.type(nameInput, 'Project Demo');
+
+    // Fill option names
+    const optionInputs = screen.getAllByPlaceholderText('Option name');
+    await userEvent.type(optionInputs[0], 'Yes');
+    await userEvent.type(optionInputs[1], 'Not yet');
 
     // Add question
     const addQuestionBtn = screen.getByRole('button', { name: /\+ Add question/i });

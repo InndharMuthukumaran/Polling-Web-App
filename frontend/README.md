@@ -179,11 +179,14 @@ Open [http://localhost:5173](http://localhost:5173) in your primary browser.
 ### 6. Create a Poll (Creator)
 1. In the first browser (Creator Dashboard), click **New poll**.
 2. Enter Poll Name: `Match Attendance`.
-3. Click the **"Yes / Not yet"** quick-fill button.
-4. Click **Add "Need more time" option**.
-5. Leave completion time mode as `"When the member settled on the target"`.
-6. Click **Create Poll**.
-7. The browser navigates to the Admin Poll Page (`/g/:groupId/polls/:pollId`).
+3. In the Options editor (which starts with two empty rows):
+   - Row 1: enter `Yes` (Role defaults to `Target`).
+   - Row 2: enter `Not yet` (Role defaults to `Not yet`).
+   - Click **+ Add another option**, enter `Need more time`, and select role `Excused / needs more time`.
+   - Observe the explanatory help line dynamically updating under each role dropdown.
+4. Notice the deadline note explaining that a member is on time if they settled on a target option before the deadline.
+5. Click **Create Poll**.
+6. The browser navigates to the Admin Poll Page (`/g/:groupId/polls/:pollId`).
 
 ### 7. Share & Vote (Member)
 1. In the creator view, copy the voting link (`http://localhost:5173/p/:pollId`).
@@ -199,11 +202,14 @@ Open [http://localhost:5173](http://localhost:5173) in your primary browser.
 2. Click **Copy defaulters (2)**.
 3. Paste into a text editor and verify Bob Smith and Charlie Brown are copied.
 
-### 9. Close Poll (Creator)
+### 9. Close Poll & Reopen Poll (Creator)
 1. Click **Close Poll**.
 2. In the confirmation dialog, click **Confirm & Close Poll**.
 3. Verify the status updates to `Closed`.
 4. In Alice's member window, reload or tap an option; verify the poll displays `"This poll is closed"` with options frozen.
+5. In the creator window, verify the Manage section now shows **Reopen poll**.
+6. Click **Reopen poll**. In the confirmation dialog, review the prompt ("Members will be able to vote and change their answers again. Their earlier votes and history are kept.") and click **Confirm & Reopen Poll**.
+7. Verify the poll status updates back to `Open` without a page reload, and voting works again.
 
 ### 10. Roster & Spreadsheet Import Smoke-Test (Part R4)
 1. Navigate back to the Creator Dashboard (`/g/:groupId`).

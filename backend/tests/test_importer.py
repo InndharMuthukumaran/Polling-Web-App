@@ -9,6 +9,7 @@ import openpyxl
 import pytest
 
 from app.errors import PollValidationError
+from app.limits import MAX_IMPORT_COLUMNS, MAX_IMPORT_ROWS
 from app.models import GroupField
 from app.services.importer import (
     convert_cell_value,
@@ -214,20 +215,20 @@ def test_parse_spreadsheet_duplicate_header_error():
 
 
 def test_parse_spreadsheet_column_limit():
-    """More than 60 columns is rejected naming the 60 limit."""
-    headers = [f"Col{i}" for i in range(61)]
-    rows = [headers, ["val"] * 61]
+    """More than MAX_IMPORT_COLUMNS is rejected naming the limit."""
+    headers = [f"Col{i}" for i in range(MAX_IMPORT_COLUMNS + 1)]
+    rows = [headers, ["val"] * (MAX_IMPORT_COLUMNS + 1)]
     with pytest.raises(PollValidationError) as exc:
         parse_raw_spreadsheet("roster.xlsx", make_xlsx(rows))
-    assert "60 columns" in exc.value.message
+    assert f"{MAX_IMPORT_COLUMNS} columns" in exc.value.message
 
 
 def test_parse_spreadsheet_row_limit():
-    """More than 2000 data rows is rejected naming the 2000 limit."""
-    rows = [["Name"]] + [[f"Member {i}"] for i in range(2001)]
+    """More than MAX_IMPORT_ROWS is rejected naming the limit."""
+    rows = [["Name"]] + [[f"Member {i}"] for i in range(MAX_IMPORT_ROWS + 1)]
     with pytest.raises(PollValidationError) as exc:
         parse_raw_spreadsheet("roster.csv", make_csv(rows))
-    assert "2000 data rows" in exc.value.message
+    assert f"{MAX_IMPORT_ROWS} data rows" in exc.value.message
 
 
 # ---------------------------------------------------------------------------

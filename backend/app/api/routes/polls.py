@@ -42,6 +42,7 @@ from app.services.polls import (
     get_poll_results,
     get_poll_status,
     remove_vote,
+    reopen_poll,
     save_poll_answers,
 )
 
@@ -301,6 +302,17 @@ def close_poll_view(
     poll, _ = target
     closed_poll = close_poll(session, poll.id)
     return PollDetailResponse.model_validate(closed_poll)
+
+
+@router.post("/{poll_id}/reopen", response_model=PollDetailResponse)
+def reopen_poll_view(
+    target: tuple[Poll, Group] = Depends(require_admin_for_poll),
+    session: Session = Depends(get_db),
+) -> PollDetailResponse:
+    """Reopen the poll. Idempotent: reopening an open poll changes nothing and does not error (admin only)."""
+    poll, _ = target
+    reopened_poll = reopen_poll(session, poll.id)
+    return PollDetailResponse.model_validate(reopened_poll)
 
 
 @router.get("/{poll_id}/results")

@@ -5,6 +5,8 @@ from typing import Any, Literal
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.limits import MIN_CHOICES
+
 
 # ---------------------------------------------------------------------------
 # Error Schemas
@@ -213,7 +215,7 @@ class PollCreate(BaseModel):
     name: str = Field(..., min_length=1)
     description_raw: str | None = None
     allow_multiple: bool
-    options: list[PollOptionCreate] = Field(..., min_length=2)
+    options: list[PollOptionCreate] = Field(..., min_length=MIN_CHOICES)
     deadline: datetime | None = None
     completion_time_mode: Literal["first", "last"] = "last"
     included_field_ids: list[UUID] | None = None
@@ -463,4 +465,19 @@ class PollResultsResponse(BaseModel):
     poll: PollResultsPollInfo
     columns: list[PollResultsColumn]
     rows: list[PollResultsRow]
+
+
+# ---------------------------------------------------------------------------
+# Limits Response Schema
+# ---------------------------------------------------------------------------
+class LimitsResponse(BaseModel):
+    max_group_fields: int
+    max_poll_fields: int
+    max_choices: int
+    min_choices: int
+    max_text_length: int
+    max_import_rows: int
+    max_import_columns: int
+    max_import_file_bytes: int
+    max_members_per_request: int
 

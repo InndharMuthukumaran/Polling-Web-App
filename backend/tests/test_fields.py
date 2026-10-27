@@ -18,6 +18,7 @@ from app.errors import (
     FieldNotFoundError,
     PollValidationError,
 )
+from app.limits import MAX_CHOICE_LENGTH, MAX_GROUP_FIELDS
 from app.models import Group, GroupField, Member
 from app.services.fields import (
     create_group_field,
@@ -188,7 +189,7 @@ def test_field_creation_rules_and_keys(db_session):
         )
     with pytest.raises(PollValidationError):
         create_group_field(
-            db_session, group.id, "Role3", "choice", choices=["Admin", "x" * 101]
+            db_session, group.id, "Role3", "choice", choices=["Admin", "x" * (MAX_CHOICE_LENGTH + 1)]
         )
 
     # Non-choice field with choices fails
@@ -197,16 +198,16 @@ def test_field_creation_rules_and_keys(db_session):
             db_session, group.id, "Notes", "text", choices=["Option 1", "Option 2"]
         )
 
-    # 6. 30 fields limit
+    # 6. Group fields limit
     current_count = len(list_group_fields(db_session, group.id))
-    for i in range(current_count, 30):
+    for i in range(current_count, MAX_GROUP_FIELDS):
         create_group_field(db_session, group.id, f"Extra Field {i}", "text")
 
-    assert len(list_group_fields(db_session, group.id)) == 30
+    assert len(list_group_fields(db_session, group.id)) == MAX_GROUP_FIELDS
 
     with pytest.raises(PollValidationError) as exc:
         create_group_field(db_session, group.id, "One Too Many", "text")
-    assert "at most 30 fields" in str(exc.value)
+    assert f"at most {MAX_GROUP_FIELDS} fields" in str(exc.value)
 
 
 # ---------------------------------------------------------------------------

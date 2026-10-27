@@ -18,6 +18,7 @@ from app.errors import (
     PermissionDeniedError,
     PollValidationError,
 )
+from app.limits import MAX_MEMBERS_PER_REQUEST
 from app.models import Group, GroupField, Member
 from app.security import (
     generate_join_code,
@@ -155,8 +156,8 @@ def add_members_bulk(
             else:
                 raw_items.append({"display_name": item, "values": {}})
 
-    if len(raw_items) > 2000:
-        raise PollValidationError("Cannot add more than 2000 members in a single request.")
+    if len(raw_items) > MAX_MEMBERS_PER_REQUEST:
+        raise PollValidationError(f"Cannot add more than {MAX_MEMBERS_PER_REQUEST} members in a single request.")
     if len(raw_items) == 0:
         raise PollValidationError("Members list cannot be empty.")
 

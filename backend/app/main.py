@@ -4,7 +4,7 @@ from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.errors import register_error_handlers
-from app.api.routes import fields, groups, health, imports, join, me, polls
+from app.api.routes import fields, groups, health, imports, join, limits, me, polls
 from app.config import settings
 
 app = FastAPI(
@@ -36,6 +36,7 @@ api_v1.include_router(groups.router)
 api_v1.include_router(fields.router)
 api_v1.include_router(imports.router)
 api_v1.include_router(join.router)
+api_v1.include_router(limits.router)
 api_v1.include_router(me.router)
 api_v1.include_router(polls.router)
 

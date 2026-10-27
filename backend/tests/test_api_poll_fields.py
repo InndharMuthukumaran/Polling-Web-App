@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from app.db import Base
 from app.main import app
+from app.limits import MAX_POLL_FIELDS
 from app.models import Group, Member
 from app.services.identity import create_group_with_admin
 from app.services.fields import create_group_field
@@ -146,13 +147,13 @@ def test_api_create_poll_validation_errors(client):
     )
     assert err_res2.status_code == 422
 
-    # 3. Over 15 fields -> 422
+    # 3. Over poll fields limit -> 422
     err_res3 = client.post(
         f"/api/v1/groups/{g_a['group_id']}/polls",
         headers=headers_a,
         json={
             **base_poll,
-            "poll_fields": [{"name": f"F{i}", "field_type": "text"} for i in range(16)],
+            "poll_fields": [{"name": f"F{i}", "field_type": "text"} for i in range(MAX_POLL_FIELDS + 1)],
         },
     )
     assert err_res3.status_code == 422

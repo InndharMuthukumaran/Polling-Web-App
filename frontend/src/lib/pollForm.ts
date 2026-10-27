@@ -1,3 +1,4 @@
+import { getCachedLimits } from '../api/client';
 import type {
   CompletionTimeMode,
   CreatePollOptionPayload,
@@ -14,6 +15,40 @@ export interface PollFormOption {
   role: PollOptionRole;
 }
 
+export interface RoleDefinition {
+  value: PollOptionRole;
+  label: string;
+  helpText: string;
+}
+
+export const ROLE_DEFINITIONS: RoleDefinition[] = [
+  {
+    value: 'target',
+    label: 'Target',
+    helpText: 'Counts as done. The poll is complete when everyone has reached a target option.',
+  },
+  {
+    value: 'in_progress',
+    label: 'In progress',
+    helpText: 'Voted, but not done yet. Shown as behind.',
+  },
+  {
+    value: 'not_yet',
+    label: 'Not yet',
+    helpText: 'Said they have not done it. Shown as behind.',
+  },
+  {
+    value: 'excused',
+    label: 'Excused / needs more time',
+    helpText: 'Not counted as behind, and does not block the poll from being complete.',
+  },
+];
+
+export function getRoleHelpText(role: string): string {
+  const match = ROLE_DEFINITIONS.find((r) => r.value === role);
+  return match ? match.helpText : '';
+}
+
 export interface PollOnlyFieldDraft {
   id: string;
   name: string;
@@ -28,7 +63,7 @@ export interface PollFormValues {
   description: string;
   allowMultiple: boolean;
   deadlineLocal: string;
-  completionTimeMode: CompletionTimeMode;
+  completionTimeMode?: CompletionTimeMode;
   options: PollFormOption[];
   includedFieldIds?: string[];
   pollFields?: PollOnlyFieldDraft[];
@@ -93,11 +128,12 @@ export function validatePollForm(
   }
 
   // Poll-only fields validation
+  const limits = getCachedLimits();
   const pollFields = values.pollFields || [];
-  if (pollFields.length > 15) {
+  if (pollFields.length > limits.max_poll_fields) {
     errors.push({
       field: 'pollFields',
-      message: 'A poll can have at most 15 poll-only fields.',
+      message: `A poll can have at most ${limits.max_poll_fields} poll-only fields.`,
     });
   }
 
@@ -168,10 +204,10 @@ export function validatePollForm(
         });
       }
 
-      if (uniqueChoices.size < 2 || uniqueChoices.size > 50) {
+      if (uniqueChoices.size < limits.min_choices || uniqueChoices.size > limits.max_choices) {
         errors.push({
           field: `pollFields.${idx}.choices`,
-          message: 'Choice questions require 2 to 50 unique choices.',
+          message: `Choice questions require ${limits.min_choices} to ${limits.max_choices} unique choices.`,
         });
       }
 
@@ -238,7 +274,7 @@ export function toCreatePayload(
     description_raw: descTrimmed.length > 0 ? descTrimmed : null,
     allow_multiple: Boolean(values.allowMultiple),
     deadline: deadlineUtc,
-    completion_time_mode: values.completionTimeMode || 'last',
+    completion_time_mode: 'last',
     options,
   };
 

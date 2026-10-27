@@ -19,6 +19,7 @@ from app.errors import (
     PollClosedError,
     PollValidationError,
 )
+from app.limits import MAX_CHOICES, MAX_POLL_FIELDS, MIN_CHOICES
 from app.models import Group, GroupField, Member, Poll, PollAnswer, PollField, PollIncludedField
 from app.services.fields import (
     create_group_field,
@@ -218,8 +219,8 @@ def test_create_poll_validation_errors(test_engine):
             )
         assert "Duplicate poll field name" in str(exc.value)
 
-        # 5. Over 15 poll fields limit
-        sixteen_fields = [{"name": f"Question {i}", "field_type": "text"} for i in range(16)]
+        # 5. Over poll fields limit
+        too_many_fields = [{"name": f"Question {i}", "field_type": "text"} for i in range(MAX_POLL_FIELDS + 1)]
         with pytest.raises(PollValidationError) as exc:
             create_poll(
                 session,
@@ -227,9 +228,9 @@ def test_create_poll_validation_errors(test_engine):
                 name="Poll Error 5",
                 allow_multiple=False,
                 options=base_opts,
-                poll_fields=sixteen_fields,
+                poll_fields=too_many_fields,
             )
-        assert "at most 15" in str(exc.value)
+        assert f"at most {MAX_POLL_FIELDS}" in str(exc.value)
 
         # 6. Invalid choices (less than 2 choices)
         with pytest.raises(PollValidationError) as exc:
@@ -241,7 +242,7 @@ def test_create_poll_validation_errors(test_engine):
                 options=base_opts,
                 poll_fields=[{"name": "Invalid Choice", "field_type": "choice", "choices": ["OnlyOne"]}],
             )
-        assert "between 2 and 50 choices" in str(exc.value)
+        assert f"between {MIN_CHOICES} and {MAX_CHOICES} choices" in str(exc.value)
 
 
 def test_deleting_included_group_field_and_unmarking_identifier(test_engine):

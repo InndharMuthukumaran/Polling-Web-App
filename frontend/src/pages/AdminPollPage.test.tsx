@@ -15,6 +15,7 @@ vi.mock('../api/endpoints', () => ({
   getAdminPollStatus: vi.fn(),
   getAdminPollHistory: vi.fn(),
   closePoll: vi.fn(),
+  reopenPoll: vi.fn(),
   getPollResults: vi.fn(),
   downloadPollResults: vi.fn(),
 }));
@@ -300,6 +301,64 @@ describe('AdminPollPage', () => {
     await userEvent.click(confirmCloseBtn);
 
     expect(endpoints.closePoll).toHaveBeenCalledWith('poll-123', 'tok-admin');
+  });
+
+  it('shows Reopen poll button for a closed poll, asks for confirmation, calls reopen endpoint, and updates the page', async () => {
+    saveAdmin('grp-123', { adminToken: 'tok-admin', groupName: 'Core Team' });
+    const closedStatus: AdminPollStatusResponse = {
+      ...mockStatus,
+      poll: {
+        ...mockStatus.poll,
+        status: 'closed',
+      },
+    };
+    vi.mocked(endpoints.getAdminPollStatus)
+      .mockResolvedValueOnce(closedStatus)
+      .mockResolvedValue({
+        ...mockStatus,
+        poll: {
+          ...mockStatus.poll,
+          status: 'open',
+        },
+      });
+    vi.mocked(endpoints.getAdminPollHistory).mockResolvedValue(mockHistory);
+    vi.mocked(endpoints.reopenPoll).mockResolvedValue({ status: 'open' });
+
+    renderAdminPollPage('grp-123', 'poll-123');
+
+    await waitFor(() => {
+      expect(screen.getByText('This poll is closed')).toBeInTheDocument();
+    });
+
+    // Check that Reopen poll button is shown instead of Close Poll
+    expect(screen.queryByRole('button', { name: /^Close Poll$/i })).not.toBeInTheDocument();
+    const reopenBtn = screen.getByRole('button', { name: /^Reopen poll$/i });
+    expect(reopenBtn).toBeInTheDocument();
+
+    // Click Reopen poll
+    await userEvent.click(reopenBtn);
+
+    // Confirmation message appears
+    expect(
+      screen.getByText(
+        'Members will be able to vote and change their answers again. Their earlier votes and history are kept.',
+      ),
+    ).toBeInTheDocument();
+    expect(endpoints.reopenPoll).not.toHaveBeenCalled();
+
+    // Confirm reopen
+    const confirmReopenBtn = screen.getByRole('button', {
+      name: /Confirm & Reopen Poll/i,
+    });
+    await userEvent.click(confirmReopenBtn);
+
+    expect(endpoints.reopenPoll).toHaveBeenCalledWith('poll-123', 'tok-admin');
+
+    // Page updates without manual reload: closed banner is gone, Close Poll button appears
+    await waitFor(() => {
+      expect(screen.queryByText('This poll is closed')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Close Poll$/i })).toBeInTheDocument();
+    });
   });
 
   describe('Results Section', () => {
