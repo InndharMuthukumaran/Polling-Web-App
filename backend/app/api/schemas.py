@@ -40,6 +40,7 @@ class GroupFieldResponse(BaseModel):
     choices: list[str] | None = None
     is_identifier: bool
     position: int
+    is_builtin: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -74,9 +75,15 @@ class GroupCreatedResponse(BaseModel):
     admin_token: str
 
 
+class DisplayFormat(BaseModel):
+    parts: list[str]
+    separator: str
+
+
 class GroupSettingsUpdate(BaseModel):
     require_claim_approval: bool | None = None
     allow_name_list: bool | None = None
+    display_format: DisplayFormat | dict[str, Any] | None = None
 
 
 class MemberSummary(BaseModel):
@@ -96,6 +103,9 @@ class GroupDetailResponse(BaseModel):
     join_code: str
     require_claim_approval: bool
     allow_name_list: bool = False
+    display_format: dict[str, Any] = Field(
+        default_factory=lambda: {"parts": ["_name"], "separator": " - "}
+    )
     fields: list[GroupFieldResponse] = Field(default_factory=list)
     members: list[MemberSummary]
 
@@ -108,6 +118,9 @@ class GroupSummaryResponse(BaseModel):
     join_code: str
     require_claim_approval: bool
     allow_name_list: bool = False
+    display_format: dict[str, Any] = Field(
+        default_factory=lambda: {"parts": ["_name"], "separator": " - "}
+    )
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -434,6 +447,7 @@ class ImportResultResponse(BaseModel):
     rows_skipped: int
     fields_created: list[str]
     errors: list[dict[str, Any]] = Field(default_factory=list)
+    display_format_saved: bool = False
 
 
 # ---------------------------------------------------------------------------

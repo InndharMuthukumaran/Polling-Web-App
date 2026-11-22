@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import pytest
 from sqlalchemy import create_engine
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from alembic import command
@@ -47,7 +48,15 @@ def test_engine_and_url():
         )
 
     # Connect to PostgreSQL - any failure raises an exception and fails the test run
-    engine = create_engine(test_db_url, echo=False)
+    engine = create_engine(
+        test_db_url,
+        echo=False,
+        pool_pre_ping=True,
+        pool_recycle=60,
+        pool_size=10,
+        max_overflow=20,
+        connect_args={"keepalives": 1, "keepalives_idle": 30, "keepalives_interval": 10, "keepalives_count": 5},
+    )
     with engine.connect() as connection:
         pass
 
@@ -74,6 +83,22 @@ def test_engine(test_engine_and_url):
     return engine
 
 
+def _clean_tables(engine):
+    """Clean all table rows with retry on transient network drops."""
+    import time
+    for attempt in range(3):
+        try:
+            with engine.begin() as conn:
+                for table in reversed(Base.metadata.sorted_tables):
+                    conn.execute(table.delete())
+            break
+        except OperationalError:
+            engine.dispose()
+            if attempt == 2:
+                raise
+            time.sleep(1)
+
+
 @pytest.fixture
 def db_session(test_engine):
     """Provide an isolated database session that leaves no data behind after each test."""
@@ -85,10 +110,7 @@ def db_session(test_engine):
     session.rollback()
     session.close()
 
-    # Clean up all data from tables in reverse dependency order
-    with test_engine.begin() as conn:
-        for table in reversed(Base.metadata.sorted_tables):
-            conn.execute(table.delete())
+    _clean_tables(test_engine)
 
 
 @pytest.fixture
@@ -117,7 +139,4 @@ def client(test_engine):
 
     app.dependency_overrides.clear()
 
-    # Clean up all data from tables in reverse dependency order
-    with test_engine.begin() as conn:
-        for table in reversed(Base.metadata.sorted_tables):
-            conn.execute(table.delete())
+    _clean_tables(test_engine)

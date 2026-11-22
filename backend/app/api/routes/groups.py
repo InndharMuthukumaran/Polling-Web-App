@@ -73,6 +73,7 @@ def get_group(
         join_code=group.join_code,
         require_claim_approval=group.require_claim_approval,
         allow_name_list=group.allow_name_list,
+        display_format=group.display_format,
         fields=[GroupFieldResponse.model_validate(f) for f in fields],
         members=[MemberSummary.model_validate(m) for m in members],
     )
@@ -85,13 +86,29 @@ def update_settings(
     session: Session = Depends(get_db),
 ) -> GroupSummaryResponse:
     """Update group settings (admin only)."""
-    if payload.require_claim_approval is None and payload.allow_name_list is None:
-        raise PollValidationError("At least one of 'require_claim_approval' or 'allow_name_list' must be provided.")
+    if (
+        payload.require_claim_approval is None
+        and payload.allow_name_list is None
+        and payload.display_format is None
+    ):
+        raise PollValidationError(
+            "At least one of 'require_claim_approval', 'allow_name_list', or 'display_format' must be provided."
+        )
+    df_dict = None
+    if payload.display_format is not None:
+        if hasattr(payload.display_format, "model_dump"):
+            df_dict = payload.display_format.model_dump()
+        elif isinstance(payload.display_format, dict):
+            df_dict = payload.display_format
+        else:
+            df_dict = dict(payload.display_format)
+
     updated_group = update_group_settings(
         session,
         group.id,
         require_claim_approval=payload.require_claim_approval,
         allow_name_list=payload.allow_name_list,
+        display_format=df_dict,
     )
     return GroupSummaryResponse.model_validate(updated_group)
 

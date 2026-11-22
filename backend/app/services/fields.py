@@ -60,6 +60,228 @@ def normalize_identifier(val: str) -> str:
     return collapsed.casefold()
 
 
+def mask_identifier(val: Any) -> str:
+    """Mask identifier for public display (e.g. •••001)."""
+    if val is None:
+        return ""
+    val_str = str(val).strip()
+    if not val_str:
+        return ""
+    if len(val_str) >= 4:
+        return f"•••{val_str[-3:]}"
+    return "•" * len(val_str)
+
+
+def format_field_value_for_display(val: Any, field_type: str | None = None) -> str:
+    """Format a single field value for display name computation.
+
+    Numbers are formatted without trailing .0.
+    """
+    if isinstance(val, bool):
+        return "true" if val else "false"
+    if isinstance(val, (int, float)):
+        if isinstance(val, float) and val.is_integer():
+            return str(int(val))
+        if isinstance(val, int):
+            return str(val)
+        return str(val)
+    if isinstance(val, str):
+        trimmed = val.strip()
+        if field_type == "number":
+            try:
+                num = float(trimmed)
+                if num.is_integer():
+                    return str(int(num))
+                return str(num)
+            except ValueError:
+                pass
+        if re.match(r"^-?\d+\.0+$", trimmed):
+            return trimmed.split(".")[0]
+        return trimmed
+    return str(val).strip()
+
+
+def compute_display_name(
+    display_format: dict[str, Any] | None,
+    field_values: dict[str, Any] | None,
+    fields_by_key: dict[str, Any] | Sequence[Any] | None = None,
+) -> str:
+    """Compute member display name from display format and field values.
+
+    Computation: take each part's value in order, skip blank values (a blank value is skipped
+    together with its separator), format numbers without trailing .0, join the remaining values
+    with the separator, trim. The result must not be empty and must be at most 255 characters.
+    """
+    if not display_format:
+        display_format = {"parts": ["_name"], "separator": " - "}
+
+    if isinstance(fields_by_key, (list, tuple, set)):
+        field_map = {f.key: f for f in fields_by_key}
+    elif isinstance(fields_by_key, dict):
+        field_map = fields_by_key
+    else:
+        field_map = {}
+
+    parts = display_format.get("parts", ["_name"])
+    separator = display_format.get("separator", " - ")
+    field_values = field_values or {}
+
+    formatted_parts: list[str] = []
+    for part in parts:
+        val = field_values.get(part)
+        if is_blank(val):
+            continue
+        f_obj = field_map.get(part)
+        f_type = getattr(f_obj, "field_type", None) if f_obj else None
+        s = format_field_value_for_display(val, f_type)
+        if s:
+            formatted_parts.append(s)
+
+    result = separator.join(formatted_parts).strip()
+    if not result:
+        format_names = []
+        for p in parts:
+            f = field_map.get(p)
+            format_names.append(f.name if f and hasattr(f, "name") else p)
+        raise PollValidationError(f"Display name is empty. Fill in: {', '.join(format_names)}.")
+
+    if len(result) > 255:
+        raise PollValidationError("Display name cannot exceed 255 characters.")
+
+    return result
+
+
+def compute_public_display_name(
+    display_format: dict[str, Any] | None,
+    field_values: dict[str, Any] | None,
+    fields_by_key: dict[str, Any] | Sequence[Any] | None = None,
+    identifier_field_key: str | None = None,
+) -> str:
+    """Compute member public display name.
+
+    If the identifier field is in the format, its part is replaced with its masked hint.
+    If the identifier is not part of the format, public label equals the display name.
+    """
+    if not display_format:
+        display_format = {"parts": ["_name"], "separator": " - "}
+
+    if isinstance(fields_by_key, (list, tuple, set)):
+        field_map = {f.key: f for f in fields_by_key}
+    elif isinstance(fields_by_key, dict):
+        field_map = fields_by_key
+    else:
+        field_map = {}
+
+    parts = display_format.get("parts", ["_name"])
+    separator = display_format.get("separator", " - ")
+    field_values = field_values or {}
+
+    formatted_parts: list[str] = []
+    for part in parts:
+        val = field_values.get(part)
+        if is_blank(val):
+            continue
+        if identifier_field_key and part == identifier_field_key:
+            masked = mask_identifier(val)
+            if masked:
+                formatted_parts.append(masked)
+        else:
+            f_obj = field_map.get(part)
+            f_type = getattr(f_obj, "field_type", None) if f_obj else None
+            s = format_field_value_for_display(val, f_type)
+            if s:
+                formatted_parts.append(s)
+
+    result = separator.join(formatted_parts).strip()
+    return result
+
+
+def validate_display_format(display_format: Any, existing_field_keys: Any) -> dict[str, Any]:
+    """Validate a display format structure against allowed rules and existing field keys."""
+    if not isinstance(display_format, dict):
+        raise PollValidationError("display_format must be a dictionary.")
+
+    parts = display_format.get("parts")
+    if not isinstance(parts, list) or not (1 <= len(parts) <= 5):
+        raise PollValidationError("Display format parts must contain between 1 and 5 fields.")
+
+    if len(parts) != len(set(parts)):
+        raise PollValidationError("Display format parts cannot contain repeated fields.")
+
+    if isinstance(existing_field_keys, (list, tuple, set)):
+        keys_set = {f.key if hasattr(f, "key") else str(f) for f in existing_field_keys}
+    elif isinstance(existing_field_keys, dict):
+        keys_set = set(existing_field_keys.keys())
+    else:
+        keys_set = set()
+
+    for p in parts:
+        if not isinstance(p, str) or p not in keys_set:
+            raise PollValidationError(f"Unknown field in display format parts: '{p}'.")
+
+    separator = display_format.get("separator")
+    if not isinstance(separator, str):
+        raise PollValidationError("Display format separator must be a string.")
+
+    if len(separator) > 10:
+        raise PollValidationError("Display format separator cannot exceed 10 characters.")
+
+    if any(ord(c) < 32 or (127 <= ord(c) <= 159) for c in separator):
+        raise PollValidationError("Display format separator cannot contain control characters.")
+
+    return {"parts": parts, "separator": separator}
+
+
+def recompute_member_display_names(session: Session, group: Group) -> None:
+    """Atomically recompute display_name for all members of a group and validate uniqueness/non-empty."""
+    fields = list_group_fields(session, group.id)
+    field_map = {f.key: f for f in fields}
+    id_field = next((f for f in fields if f.is_identifier), None)
+
+    members = list(
+        session.scalars(select(Member).where(Member.group_id == group.id)).all()
+    )
+
+    errors: list[dict[str, Any]] = []
+    computed_rows: list[tuple[Member, str]] = []
+    seen_names: dict[str, str] = {}
+
+    for m in members:
+        try:
+            comp_name = compute_display_name(group.display_format, m.field_values, field_map)
+        except PollValidationError as exc:
+            errors.append({
+                "member_id": str(m.id),
+                "display_name": m.display_name,
+                "message": exc.message,
+            })
+            continue
+
+        if id_field is None:
+            if comp_name in seen_names:
+                errors.append({
+                    "member_id": str(m.id),
+                    "display_name": m.display_name,
+                    "message": f"Duplicate display name '{comp_name}' (conflicts with '{seen_names[comp_name]}').",
+                })
+            else:
+                seen_names[comp_name] = m.display_name
+
+        computed_rows.append((m, comp_name))
+
+    if errors:
+        total = len(errors)
+        primary_msg = (
+            f"Cannot update display format: {total} member(s) would end up with an empty or duplicate display name."
+        )
+        raise PollValidationError(primary_msg, details=errors[:10])
+
+    for m, comp_name in computed_rows:
+        m.display_name = comp_name
+
+    session.flush()
+
+
 def generate_field_key(name: str, existing_keys: set[str]) -> str:
     """Generate a unique key for a field from its name.
 
@@ -290,7 +512,8 @@ def create_group_field(
         ).all()
     )
 
-    if len(existing_fields) >= MAX_GROUP_FIELDS:
+    custom_fields = [f for f in existing_fields if not getattr(f, "is_builtin", False)]
+    if len(custom_fields) >= MAX_GROUP_FIELDS:
         raise PollValidationError(f"A group can have at most {MAX_GROUP_FIELDS} fields.")
 
     clean_name, clean_choices, clean_default = validate_field_definition(
@@ -453,6 +676,24 @@ def update_group_field(
 
     # Required status update
     if is_required is not None:
+        if (getattr(field, "is_builtin", False) or field.key == "_name") and not is_required:
+            group_format = getattr(group, "display_format", None) or {"parts": ["_name"], "separator": " - "}
+            if field.key in group_format.get("parts", []):
+                empty_members = [m for m in members if is_blank((m.field_values or {}).get(field.key))]
+                if empty_members:
+                    details = [
+                        {
+                            "field": field.name,
+                            "member_id": str(m.id),
+                            "message": f"Member '{m.display_name}' has no value for {field.name}.",
+                        }
+                        for m in empty_members[:10]
+                    ]
+                    raise PollValidationError(
+                        f"Cannot make field '{field.name}' optional while display name depends on it and {len(empty_members)} member(s) have no value.",
+                        details=details,
+                    )
+
         will_be_identifier = is_identifier if is_identifier is not None else field.is_identifier
         if will_be_identifier and not is_required:
             raise PollValidationError("An identifier field must be required.")
@@ -482,6 +723,8 @@ def update_group_field(
 
     # Identifier status update
     if is_identifier is not None:
+        if is_identifier and (getattr(field, "is_builtin", False) or field.key == "_name"):
+            raise PollValidationError("The Name field cannot be the identifier.")
         if is_identifier and not field.is_identifier:
             # Marking as identifier
             if field.field_type != "text":
@@ -563,6 +806,13 @@ def delete_group_field(
     if not field or field.group_id != gid:
         raise FieldNotFoundError(f"Field {fid} not found in group {gid}.")
 
+    if getattr(field, "is_builtin", False) or field.key == "_name":
+        raise PollValidationError("The Name field cannot be deleted.")
+
+    group_format = getattr(group, "display_format", None) or {"parts": ["_name"], "separator": " - "}
+    if field.key in group_format.get("parts", []):
+        raise PollValidationError("Remove it from the display name first.")
+
     if field.is_identifier:
         raise PollValidationError(
             "The identifier field cannot be deleted; unmark it first."
@@ -638,7 +888,7 @@ def validate_member_values_for_create(
                 cleaned_values[field.key] = parse_default_value(
                     field.field_type, field.default_value, field.choices
                 )
-            elif field.is_required:
+            elif field.is_required and not getattr(field, "is_builtin", False) and field.key != "_name":
                 raise PollValidationError(
                     f"Field '{field.name}' is required.",
                     details=[

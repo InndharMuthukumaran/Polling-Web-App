@@ -262,19 +262,25 @@ def test_suggested_mapping_rules():
 
 def test_template_generation_xlsx_and_csv():
     """Template includes Name first, then fields in position order, with choice dropdown."""
+    f0 = MagicMock(spec=GroupField)
+    f0.name = "Name"
+    f0.position = 1
+    f0.field_type = "text"
+    f0.choices = None
+
     f1 = MagicMock(spec=GroupField)
     f1.name = "Department"
-    f1.position = 2
+    f1.position = 3
     f1.field_type = "choice"
     f1.choices = ["CSE", "ECE", "MECH"]
 
     f2 = MagicMock(spec=GroupField)
     f2.name = "Register No"
-    f2.position = 1
+    f2.position = 2
     f2.field_type = "text"
     f2.choices = None
 
-    fields = [f1, f2]
+    fields = [f0, f1, f2]
 
     # 1. CSV Template
     csv_bytes, media_csv, fname_csv = generate_template_file(fields, "csv")

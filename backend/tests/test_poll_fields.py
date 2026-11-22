@@ -580,7 +580,7 @@ def test_export_csv_and_xlsx_services(test_engine):
         reader = list(csv.reader(io.StringIO(csv_text)))
         headers = reader[0]
         assert headers == [
-            "Name",
+            "Display name",
             "EmpID",
             "Formula Injection",
             "Negative Number",

@@ -41,6 +41,7 @@ from app.models import (
 )
 from app.security import generate_join_code
 from app.services.fields import (
+    compute_display_name,
     generate_field_key,
     is_blank,
     validate_answers_for_update,
@@ -128,9 +129,27 @@ def create_group(
         join_code=generate_join_code(),
         admin_token_hash=None,
         require_claim_approval=False,
+        display_format={"parts": ["_name"], "separator": " - "},
         created_at=current_time,
     )
     session.add(group)
+
+    builtin_field = GroupField(
+        id=uuid.uuid4(),
+        group_id=group.id,
+        key="_name",
+        name="Name",
+        field_type="text",
+        is_required=True,
+        default_value=None,
+        choices=None,
+        is_identifier=False,
+        position=1,
+        is_builtin=True,
+        created_at=current_time,
+    )
+    session.add(builtin_field)
+
     session.commit()
     session.refresh(group)
     return group
@@ -154,9 +173,12 @@ def add_member(
     if not group:
         raise GroupNotFoundError(f"Group {gid} not found.")
 
-    if not display_name or not display_name.strip():
+    raw_vals = dict(values or {})
+    if display_name is not None and display_name.strip():
+        if "_name" not in raw_vals:
+            raw_vals["_name"] = display_name.strip()
+    elif "_name" not in raw_vals and (not display_name or not display_name.strip()):
         raise PollValidationError("Member display_name cannot be empty.")
-    clean_name = display_name.strip()
 
     fields = list(
         session.scalars(
@@ -166,8 +188,10 @@ def add_member(
         ).all()
     )
     id_field = next((f for f in fields if f.is_identifier), None)
+    field_map = {f.key: f for f in fields}
 
-    cleaned_vals, identifier_val = validate_member_values_for_create(fields, values)
+    cleaned_vals, identifier_val = validate_member_values_for_create(fields, raw_vals)
+    comp_name = compute_display_name(group.display_format, cleaned_vals, field_map)
 
     if id_field is not None:
         if identifier_val is not None:
@@ -185,19 +209,19 @@ def add_member(
         existing = session.scalar(
             select(Member).where(
                 Member.group_id == gid,
-                Member.display_name == clean_name,
+                Member.display_name == comp_name,
             )
         )
         if existing:
             raise PollValidationError(
-                f"Member with name '{clean_name}' already exists in group."
+                f"Member with name '{comp_name}' already exists in group."
             )
 
     current_time = ensure_utc(now) or datetime.now(timezone.utc)
     member = Member(
         id=uuid.uuid4(),
         group_id=gid,
-        display_name=clean_name,
+        display_name=comp_name,
         is_active=is_active,
         field_values=cleaned_vals,
         identifier_value=identifier_val,
@@ -1179,7 +1203,7 @@ def export_poll_results_csv(results: dict[str, Any]) -> tuple[bytes, str]:
     filename = make_safe_filename(poll_name, "csv")
 
     columns = results["columns"]
-    headers = ["Name"] + [col["name"] for col in columns] + [
+    headers = ["Display name"] + [col["name"] for col in columns] + [
         "Status",
         "Selected options",
         "Late",
@@ -1229,7 +1253,7 @@ def export_poll_results_xlsx(results: dict[str, Any]) -> tuple[bytes, str]:
     filename = make_safe_filename(poll_name, "xlsx")
 
     columns = results["columns"]
-    headers = ["Name"] + [col["name"] for col in columns] + [
+    headers = ["Display name"] + [col["name"] for col in columns] + [
         "Status",
         "Selected options",
         "Late",

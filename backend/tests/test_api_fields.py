@@ -43,7 +43,8 @@ def test_field_endpoints_crud_and_auth(client):
         headers={"X-Admin-Token": token_a},
     )
     assert res.status_code == 200
-    assert res.json() == []
+    custom_fields = [f for f in res.json() if not f.get("is_builtin")]
+    assert custom_fields == []
 
     # 2. POST /fields
     res = client.post(
@@ -66,7 +67,7 @@ def test_field_endpoints_crud_and_auth(client):
     assert f1["field_type"] == "text"
     assert f1["is_required"] is False
     assert f1["is_identifier"] is False
-    assert f1["position"] == 1
+    assert f1["position"] == 2
     f1_id = f1["id"]
 
     # Create field 2 (choice)
@@ -85,7 +86,7 @@ def test_field_endpoints_crud_and_auth(client):
     assert f2["key"] == "branch"
     assert f2["choices"] == ["CSE", "ECE", "MECH"]
     assert f2["default_value"] == "CSE"
-    assert f2["position"] == 2
+    assert f2["position"] == 3
     f2_id = f2["id"]
 
     # 3. GET /fields ordered by position
@@ -94,10 +95,10 @@ def test_field_endpoints_crud_and_auth(client):
         headers={"X-Admin-Token": token_a},
     )
     assert res.status_code == 200
-    fields_list = res.json()
+    fields_list = [f for f in res.json() if not f.get("is_builtin")]
     assert len(fields_list) == 2
-    assert fields_list[0]["position"] == 1
-    assert fields_list[1]["position"] == 2
+    assert fields_list[0]["position"] == 2
+    assert fields_list[1]["position"] == 3
 
     # 4. PATCH /fields/{id}
     res = client.patch(
@@ -135,7 +136,7 @@ def test_field_endpoints_crud_and_auth(client):
         f"/api/v1/groups/{group_a_id}/fields",
         headers={"X-Admin-Token": token_a},
     )
-    assert len(res.json()) == 1
+    assert len([f for f in res.json() if not f.get("is_builtin")]) == 1
 
 
 def test_members_bulk_api_validation_and_row_details(client):
@@ -361,10 +362,11 @@ def test_get_group_includes_fields_and_member_values_and_identifier(client):
 
     # Check fields
     assert "fields" in body
-    assert len(body["fields"]) == 2
-    assert body["fields"][0]["key"] == "id_code"
-    assert body["fields"][0]["is_identifier"] is True
-    assert body["fields"][1]["key"] == "city"
+    custom_fields = [f for f in body["fields"] if not f.get("is_builtin")]
+    assert len(custom_fields) == 2
+    assert custom_fields[0]["key"] == "id_code"
+    assert custom_fields[0]["is_identifier"] is True
+    assert custom_fields[1]["key"] == "city"
 
     # Check members
     assert len(body["members"]) == 2

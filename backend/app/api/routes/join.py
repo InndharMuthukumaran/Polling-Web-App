@@ -17,6 +17,7 @@ from app.config import settings
 from app.errors import MemberNotFoundError
 from app.models import GroupField, Member
 from app.ratelimit import get_client_ip, lookup_limiter
+from app.services.fields import compute_public_display_name
 from app.services.identity import (
     claim_member,
     get_group_by_join_code,
@@ -34,12 +35,14 @@ def get_join_info(
 ) -> JoinGroupResponse:
     """Return group name, claim settings, and active members (public)."""
     group = get_group_by_join_code(session, join_code)
-    id_field = session.scalar(
-        select(GroupField).where(
-            GroupField.group_id == group.id,
-            GroupField.is_identifier.is_(True),
-        )
+    fields = list(
+        session.scalars(
+            select(GroupField)
+            .where(GroupField.group_id == group.id)
+            .order_by(GroupField.position)
+        ).all()
     )
+    id_field = next((f for f in fields if f.is_identifier), None)
 
     claim_mode = "identifier" if id_field is not None else "list"
     identifier_label = id_field.name if id_field is not None else None
@@ -62,10 +65,16 @@ def get_join_info(
             if id_field is not None and m.field_values:
                 raw_val = m.field_values.get(id_field.key)
                 hint = mask_identifier(raw_val)
+            pub_name = compute_public_display_name(
+                group.display_format,
+                m.field_values or {},
+                fields,
+                id_field.key if id_field else None,
+            )
             members_list.append(
                 JoinMemberSummary(
                     id=m.id,
-                    display_name=m.display_name,
+                    display_name=pub_name,
                     taken=m.claim_status in ("pending", "approved"),
                     identifier_hint=hint,
                 )

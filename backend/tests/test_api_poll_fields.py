@@ -451,7 +451,7 @@ def test_api_results_csv_and_xlsx_download(client):
     csv_text = csv_content.decode("utf-8-sig")
     reader = list(csv.reader(io.StringIO(csv_text)))
     assert reader[0] == [
-        "Name",
+        "Display name",
         "Tag",
         "Score",
         "Status",

@@ -972,3 +972,69 @@ This section captures assumptions and design decisions made for Part FB (Permane
   - On success: removes saved creator access for this group from `localStorage`, redirects to `/` displaying green notice banner `"Group deleted."`.
 - **Deleted Entity 404 Behavior**:
   - `JoinPage` and `PollPage` check for 404 (`not_found`): display message `"This group or poll no longer exists."` and clear any stored device identity for that join code.
+
+# Assumptions and Design Decisions (Part C1: Computed Display Names and Built-in Name Field)
+
+This section captures assumptions and design decisions made for Part C1 (Computed Member Display Names and Built-in Name Field).
+
+## 1. Migration (`006_display_format`)
+- **Revision Ordering**: Placed as migration `006_display_format` following `005_poll_fields` (the previous head revision).
+- **Columns Added**:
+  - `groups.display_format`: JSONB, not null, default `{"parts": ["_name"], "separator": " - "}`.
+  - `group_fields.is_builtin`: Boolean, not null, default `false`.
+- **Backfill Strategy for Existing Databases**:
+  - For every existing group:
+    1. Existing field positions are shifted up by 1 (`position = position + 1`).
+    2. A built-in field is created with `key = '_name'`, `field_type = 'text'`, `is_required = true`, `is_builtin = true`, `position = 1`.
+    3. The built-in field's name defaults to `'Name'`. If a custom field with that name already exists (case-insensitive), it sequentially tries `'Member name'`, `'Member name 2'`, etc. until an unused name is found.
+    4. Each member's existing `display_name` is copied into `field_values["_name"]`.
+- **Downgrade**:
+  - Deletes all built-in fields where `is_builtin = true` or `key = '_name'`.
+  - Drops `is_builtin` column from `group_fields`.
+  - Drops `display_format` column from `groups`.
+
+## 2. Built-in Name Field
+- **Key & Positioning**: Reserved key `_name`, position 1. Cannot clash with custom fields because generated custom field keys never start with an underscore.
+- **Constraints & Immutability**:
+  - Cannot be deleted (`422: The Name field cannot be deleted.`).
+  - Cannot be set as the identifier (`422: The Name field cannot be the identifier.`).
+  - Cannot change its `field_type` (remains `text`).
+  - Can be renamed freely.
+  - Can have its `is_required` flag set to `false`, provided the display format does not depend on it while any member has an empty value.
+- **Field Limit Exemption**: Built-in fields are excluded when checking against `MAX_GROUP_FIELDS` (groups may have 100 custom fields in addition to the built-in Name field).
+
+## 3. Display Format & Computation
+- **Format Schema**: `{"parts": [fieldKey, ...], "separator": "<text>"}`.
+  - Parts: between 1 and 5 fields, no duplicates, each must reference an existing group field key.
+  - Separator: at most 10 characters, no control characters (empty string `""` allowed). Default: `" - "`.
+- **Display Name Calculation (`compute_display_name`)**:
+  - Evaluates each part in format order.
+  - Blank values (None, empty, whitespace-only) are skipped along with their separator.
+  - Numbers are formatted without trailing `.0` (e.g. `101.0` -> `101`).
+  - Remaining values are joined using the separator and trimmed.
+  - Result must be between 1 and 255 characters. An empty result raises `PollValidationError` with row-level error `"Display name is empty. Fill in: <field names>."`.
+- **Atomic Recomputation**:
+  - `recompute_member_display_names(session, group)` acquires a row lock on the group row and recalculates all member display names atomically.
+  - Changing group display format validates all members against empty labels and uniqueness. If any member violates constraints, fails with 422 with the total count in the error message and details containing up to 10 failing rows.
+  - Any field referenced in `group.display_format` cannot be deleted (`422: Remove it from the display name first.`).
+
+## 4. Uniqueness & Public Masking
+- **Uniqueness Rules**:
+  - In groups **without** an identifier field, computed display names must be unique (exact match after trimming).
+  - In groups **with** an identifier field, duplicate computed display names are permitted.
+- **Public Label Masking**:
+  - On public endpoints (`GET /join/{join_code}` when `allow_name_list` is enabled), members are returned with their `public display name`.
+  - If the identifier field is part of the display format, its value is masked (e.g. `•••001` using `mask_identifier`).
+  - If the identifier field is not part of the display format, the public display name equals the computed display name.
+  - The lookup endpoint (`POST /join/{join_code}/lookup`) continues to return the full unmasked display name for a typed identifier.
+
+## 5. Importer & Export Enhancements
+- **Importer Enhancements**:
+  - Removed mandatory "Exactly one column mapped to Name" constraint. Columns may map to `"name"` or `"_name"` (both map to built-in Name), custom keys, or `"skip"`.
+  - Supports `display_format` parameter in the multipart request with `"col:<index>"` column references.
+  - Columns mapped to new fields resolve `"col:<index>"` to the generated field keys before validating and saving format and members in one transaction.
+  - Returns `display_format_saved: true` when a format was provided and applied.
+- **Template & Exports**:
+  - Member template download headers list all fields in position order with the built-in Name field first.
+  - Roster export begins with `"Display name"`, followed by all group fields in position order, then `"Status"` and `"Active"`.
+  - Poll results exports (CSV, XLSX, and JSON) use `"Display name"` as the header for the first column.

@@ -32,7 +32,11 @@ from app.security import (
     verify_token_hash,
 )
 from app.services.fields import (
+    compute_display_name,
+    list_group_fields,
     normalize_identifier,
+    recompute_member_display_names,
+    validate_display_format,
     validate_member_values_for_create,
     validate_member_values_for_update,
 )
@@ -77,9 +81,27 @@ def create_group_with_admin(
         join_code=join_code,
         admin_token_hash=hash_token(admin_token),
         require_claim_approval=False,
+        display_format={"parts": ["_name"], "separator": " - "},
         created_at=current_time,
     )
     session.add(group)
+
+    builtin_field = GroupField(
+        id=uuid.uuid4(),
+        group_id=group.id,
+        key="_name",
+        name="Name",
+        field_type="text",
+        is_required=True,
+        default_value=None,
+        choices=None,
+        is_identifier=False,
+        position=1,
+        is_builtin=True,
+        created_at=current_time,
+    )
+    session.add(builtin_field)
+
     session.commit()
     session.refresh(group)
     return group, admin_token
@@ -117,12 +139,30 @@ def update_group_settings(
     group_id: uuid.UUID | str,
     require_claim_approval: bool | None = None,
     allow_name_list: bool | None = None,
+    display_format: dict[str, Any] | None = None,
 ) -> Group:
     """Update settings for a group."""
     gid = resolve_uuid(group_id)
-    group = session.get(Group, gid)
+
+    # Concurrency lock on group row
+    group = session.scalar(
+        select(Group).where(Group.id == gid).with_for_update()
+    )
     if not group:
         raise GroupNotFoundError(f"Group {gid} not found.")
+
+    if display_format is not None:
+        fields = list_group_fields(session, group.id)
+        existing_keys = {f.key for f in fields}
+        validated_format = validate_display_format(display_format, existing_keys)
+        old_format = group.display_format
+        group.display_format = validated_format
+        try:
+            recompute_member_display_names(session, group)
+        except Exception:
+            group.display_format = old_format
+            session.rollback()
+            raise
 
     if require_claim_approval is not None:
         group.require_claim_approval = bool(require_claim_approval)
@@ -189,29 +229,27 @@ def add_members_bulk(
     seen_display_names: dict[str, int] = {}
     seen_identifiers: dict[str, int] = {}
     validated_rows: list[tuple[str, dict[str, Any], str | None]] = []
+    field_map = {f.key: f for f in fields}
 
     for idx, item in enumerate(raw_items):
         row = idx + 1
         name_val = item.get("display_name")
-        if not isinstance(name_val, str) or not name_val.strip():
-            details.append({
-                "row": row,
-                "field": "display_name",
-                "message": "Member display_name cannot be blank.",
-            })
-            clean_name = ""
-        else:
-            clean_name = name_val.strip()
+        raw_vals = dict(item.get("values") or {})
 
-        # Check values
-        raw_vals = item.get("values")
+        # display_name is shorthand for values["_name"] (if both given, values wins)
+        if name_val is not None:
+            if "_name" not in raw_vals:
+                raw_vals["_name"] = name_val
+
         cleaned_vals: dict[str, Any] = {}
         identifier_val: str | None = None
+        row_has_error = False
         try:
             cleaned_vals, identifier_val = validate_member_values_for_create(
                 fields, raw_vals, row=row
             )
         except PollValidationError as exc:
+            row_has_error = True
             if exc.details:
                 details.extend(exc.details)
             else:
@@ -221,45 +259,58 @@ def add_members_bulk(
                     "message": exc.message,
                 })
 
+        comp_name = ""
+        if not row_has_error:
+            try:
+                comp_name = compute_display_name(group.display_format, cleaned_vals, field_map)
+            except PollValidationError as exc:
+                row_has_error = True
+                details.append({
+                    "row": row,
+                    "field": "display_name",
+                    "message": exc.message,
+                })
+
         # Uniqueness checks
-        if id_field is not None:
-            # Group has an identifier field: duplicate display names allowed, identifier must be unique
-            if identifier_val is not None:
-                if identifier_val in seen_identifiers:
-                    details.append({
-                        "row": row,
-                        "field": id_field.name,
-                        "message": "Duplicate identifier value in batch.",
-                    })
-                else:
-                    seen_identifiers[identifier_val] = row
+        if not row_has_error:
+            if id_field is not None:
+                # Group has an identifier field: duplicate display names allowed, identifier must be unique
+                if identifier_val is not None:
+                    if identifier_val in seen_identifiers:
+                        details.append({
+                            "row": row,
+                            "field": id_field.name,
+                            "message": "Duplicate identifier value in batch.",
+                        })
+                    else:
+                        seen_identifiers[identifier_val] = row
 
-                if identifier_val in existing_identifiers:
-                    details.append({
-                        "row": row,
-                        "field": id_field.name,
-                        "message": "Member with identifier already exists in group.",
-                    })
-        else:
-            # Group has NO identifier field: display_name must be unique
-            if clean_name:
-                if clean_name in seen_display_names:
-                    details.append({
-                        "row": row,
-                        "field": "display_name",
-                        "message": f"Duplicate display_name in batch: '{clean_name}'.",
-                    })
-                else:
-                    seen_display_names[clean_name] = row
+                    if identifier_val in existing_identifiers:
+                        details.append({
+                            "row": row,
+                            "field": id_field.name,
+                            "message": "Member with identifier already exists in group.",
+                        })
+            else:
+                # Group has NO identifier field: display_name must be unique
+                if comp_name:
+                    if comp_name in seen_display_names:
+                        details.append({
+                            "row": row,
+                            "field": "display_name",
+                            "message": f"Duplicate display_name in batch: '{comp_name}'.",
+                        })
+                    else:
+                        seen_display_names[comp_name] = row
 
-                if clean_name in existing_display_names:
-                    details.append({
-                        "row": row,
-                        "field": "display_name",
-                        "message": f"Member with name '{clean_name}' already exists in group.",
-                    })
+                    if comp_name in existing_display_names:
+                        details.append({
+                            "row": row,
+                            "field": "display_name",
+                            "message": f"Member with name '{comp_name}' already exists in group.",
+                        })
 
-        validated_rows.append((clean_name, cleaned_vals, identifier_val))
+        validated_rows.append((comp_name, cleaned_vals, identifier_val))
 
     if details:
         primary_msg = details[0]["message"] if len(details) == 1 else "Validation failed for one or more members."
@@ -337,30 +388,20 @@ def update_member(
     )
     id_field = next((f for f in fields if f.is_identifier), None)
 
-    if display_name is not None:
-        if not isinstance(display_name, str) or not display_name.strip():
-            raise PollValidationError("display_name cannot be blank.")
-        trimmed = display_name.strip()
-        if trimmed != member.display_name:
-            if id_field is None:
-                # Uniqueness required only when no identifier field exists
-                existing = session.scalar(
-                    select(Member).where(
-                        Member.group_id == gid,
-                        Member.display_name == trimmed,
-                        Member.id != mid,
-                    )
-                )
-                if existing:
-                    raise PollValidationError(f"Display name '{trimmed}' already in use.")
-            member.display_name = trimmed
+    field_map = {f.key: f for f in fields}
 
-    if is_active is not None:
-        member.is_active = bool(is_active)
-
+    # Prepare values update incorporating display_name shorthand
+    merged_values: dict[str, Any] | None = None
     if values is not None:
+        merged_values = dict(values)
+        if display_name is not None and "_name" not in merged_values:
+            merged_values["_name"] = display_name
+    elif display_name is not None:
+        merged_values = {"_name": display_name}
+
+    if merged_values is not None:
         updated_values, new_id_val = validate_member_values_for_update(
-            fields, member.field_values or {}, values
+            fields, member.field_values or {}, merged_values
         )
         if id_field is not None and new_id_val is not None:
             # Check identifier uniqueness among other members
@@ -377,8 +418,24 @@ def update_member(
                 )
             member.identifier_value = new_id_val
 
-        # Assign a NEW dict so SQLAlchemy sees the mutation
+        # Recompute display name
+        new_comp_name = compute_display_name(group.display_format, updated_values, field_map)
+        if id_field is None and new_comp_name != member.display_name:
+            existing = session.scalar(
+                select(Member).where(
+                    Member.group_id == gid,
+                    Member.display_name == new_comp_name,
+                    Member.id != mid,
+                )
+            )
+            if existing:
+                raise PollValidationError(f"Display name '{new_comp_name}' already in use.")
+
+        member.display_name = new_comp_name
         member.field_values = {**updated_values}
+
+    if is_active is not None:
+        member.is_active = bool(is_active)
 
     session.commit()
     session.refresh(member)
@@ -800,7 +857,7 @@ def export_roster_csv(session: Session, group_id: uuid.UUID | str) -> tuple[byte
     slug = make_group_slug(group.name)
     filename = f"roster-{slug}.csv"
 
-    headers = ["Name"] + [f.name for f in fields] + ["Status", "Active"]
+    headers = ["Display name"] + [f.name for f in fields] + ["Status", "Active"]
 
     output = io.StringIO()
     writer = csv.writer(output)
@@ -834,7 +891,7 @@ def export_roster_xlsx(session: Session, group_id: uuid.UUID | str) -> tuple[byt
     slug = make_group_slug(group.name)
     filename = f"roster-{slug}.xlsx"
 
-    headers = ["Name"] + [f.name for f in fields] + ["Status", "Active"]
+    headers = ["Display name"] + [f.name for f in fields] + ["Status", "Active"]
 
     wb = openpyxl.Workbook()
     ws = wb.active

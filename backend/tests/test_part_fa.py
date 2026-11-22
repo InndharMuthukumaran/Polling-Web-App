@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from app.errors import PollClosedError, PollValidationError
 from app import limits
-from app.models import Group, Member, Poll, PollAnswer, PollField, PollOption, Vote, VoteHistory
+from app.models import Group, GroupField, Member, Poll, PollAnswer, PollField, PollOption, Vote, VoteHistory
 from app.services.fields import create_group_field, list_group_fields
 from app.services.identity import claim_member, create_group_with_admin
 from app.services.importer import parse_raw_spreadsheet
@@ -49,10 +49,24 @@ def test_boundary_group_fields_limit(db_session):
     """100 group fields allowed, 101st refused."""
     group, _ = create_group_with_admin(db_session, "Fields Limit Group")
 
-    for i in range(limits.MAX_GROUP_FIELDS):
-        create_group_field(db_session, group.id, f"Field_{i}", "text")
+    db_session.add_all([
+        GroupField(
+            group_id=group.id,
+            name=f"Field_{i}",
+            field_type="text",
+            position=i + 2,
+            key=f"field_{i}",
+            is_builtin=False,
+            is_required=False,
+            is_identifier=False,
+        )
+        for i in range(limits.MAX_GROUP_FIELDS - 1)
+    ])
+    db_session.commit()
 
-    assert len(list_group_fields(db_session, group.id)) == limits.MAX_GROUP_FIELDS
+    create_group_field(db_session, group.id, f"Field_{limits.MAX_GROUP_FIELDS - 1}", "text")
+
+    assert len([f for f in list_group_fields(db_session, group.id) if not f.is_builtin]) == limits.MAX_GROUP_FIELDS
 
     with pytest.raises(PollValidationError) as exc:
         create_group_field(db_session, group.id, "Field_101", "text")

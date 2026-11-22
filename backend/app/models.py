@@ -70,6 +70,12 @@ class Group(Base):
     allow_name_list: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
     )
+    display_format: Mapped[dict] = mapped_column(
+        JSONB,
+        default=lambda: {"parts": ["_name"], "separator": " - "},
+        server_default=text('\'{"parts": ["_name"], "separator": " - "}\'::jsonb'),
+        nullable=False,
+    )
     created_at: Mapped[datetime] = mapped_column(
         UTCDateTime, default=utc_now, nullable=False
     )
@@ -125,6 +131,9 @@ class GroupField(Base):
         Boolean, default=False, nullable=False
     )
     position: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_builtin: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(
         UTCDateTime, default=utc_now, nullable=False
     )

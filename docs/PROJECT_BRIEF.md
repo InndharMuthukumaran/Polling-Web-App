@@ -1,6 +1,6 @@
 # Project Brief: Advanced Group Polling (working title)
 
-Version 21. Last updated: 18 Oct 2026. Status: First full version built, verified and deployment-ready. Feedback round 1 agreed (section 6a); prompts FA and FB are ready and run back to back: FA = simpler poll form, central higher limits, reopen closed polls; FB = delete members, polls and groups, bulk member selection, roster export. Next after those: display name format (C), filter and sort engine (D), poll audience (E).
+Version 22. Last updated: 27 Oct 2026. Status: FA and FB built and verified (161 backend tests, 167 frontend tests, real-browser checks). Next: C1 (backend) display name format, prompt ready, run alone; then C2 (frontend, written after C1 is verified), D (filters and sorting), E (poll audience).
 
 ## 0. How Claude should use this document
 
@@ -157,9 +157,13 @@ Requested by Inndhar (status: requested; Claude's proposed handling in brackets,
 
 Suggested build order: (A) poll form simplification, higher limits and reopen; (B) deleting members, polls and groups; (C) display name format; (D) filter and sort engine with saved filters and bulk actions; (E) poll audience. Then finish manual testing, deploy, then Part 4.
 
+FA and FB: DONE (verified 27 Oct). Backend: 161 tests, three runs in a row; frontend: 167 tests; live checks of limits, reopen, roster export, member, poll and group deletion with cascades, permissions and confirmations; real-browser checks of the simplified poll form, close and reopen, Escape on dialogs, bulk selection, downloads and the typed-name group delete.
+
 Agreed 18 Oct: point 2 reading confirmed (always judge by the settled-on-target rule, with a short note; poll complete only when every non-excused member has reached a target). The other proposed handling above stands unless Inndhar says otherwise.
 
 Prompts: FA (part-fa-prompt.md: points 2, 3, 4, 5; all limits move to one constants file backend/app/limits.py with a public GET /api/v1/limits: group fields 100, poll questions 50, choices 200, import rows 5000, import columns 120, members per request 5000) and FB (part-fb-prompt.md: point 1; member, poll and group delete, group delete needs the exact group name in a header, bulk member selection, roster export in CSV and Excel with formula protection, existing add and edit dialogs close on Escape). All foreign keys are already ON DELETE CASCADE. Run FA then FB, one commit each.
+
+C1 (part-c1-prompt.md, backend only; point 7): a built-in Name field in every group (reserved key _name, not deletable, not the identifier); a per-group display format (1 to 5 fields and a separator, default just Name); members' display_name becomes computed and always kept up to date, so existing readers keep working; groups without an identifier still need unique display names; the public name list shows the identifier masked; the import no longer forces a column to be Name and can set the display format in the same request (parts may point at columns being turned into new fields); the first column of the roster export and the poll results exports is called Display name. Run C1 alone and verify before C2 (frontend: format editor with live preview, roster columns, import wizard changes).
 
 ## 7. Platform and hosting notes (as of Sep 2026, verify before relying)
 
@@ -215,3 +219,4 @@ Prompts: FA (part-fa-prompt.md: points 2, 3, 4, 5; all limits move to one consta
 - 2026-10-10: D1 verified (see the D1 line in section 5). Inndhar plans manual local testing before deploying.
 - 2026-10-18: Inndhar's first manual testing round (see section 6a). Repository state checked: there is no delete endpoint for members, polls or groups, no reopen, and no audience feature; the limits come from fields.py (30 fields, choices 2 to 50, text 500 characters, links 2000), polls.py (15 poll-only fields, at least 2 options, no maximum on options) and importer.py (2000 rows, 5 MB, 60 columns).
 - 2026-10-18: Point 2 confirmed by Inndhar. Prompts FA and FB written.
+- 2026-10-27: FA and FB verified. C1 prompt written (display name format).

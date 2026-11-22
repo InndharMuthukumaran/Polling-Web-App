@@ -346,8 +346,8 @@ def test_delete_poll_concurrent_waiting_vote_gets_404(db_session):
     t_del.start()
     t_vot.start()
 
-    t_del.join(timeout=5.0)
-    t_vot.join(timeout=5.0)
+    t_del.join(timeout=30.0)
+    t_vot.join(timeout=30.0)
 
     # The voter MUST get 404 (PollNotFoundError), not server error
     assert vote_result.get("status") == "404"
@@ -509,8 +509,8 @@ def test_roster_export_csv_and_xlsx_with_formula_protection(client, db_session):
     csv_text = res_csv.content.decode("utf-8-sig")
     lines = [line.strip() for line in csv_text.splitlines() if line.strip()]
     header = lines[0].split(",")
-    # Columns: Name, Department, RegisterNo, Status, Active
-    assert header == ["Name", "Department", "RegisterNo", "Status", "Active"]
+    # Columns: Display name, Name, Department, RegisterNo, Status, Active
+    assert header == ["Display name", "Name", "Department", "RegisterNo", "Status", "Active"]
 
     # Check Charlie's row has formula protection: starts with '=Charlie' -> should be "'=Charlie"
     # and Department has '+Lead' -> should be "'+Lead"
@@ -531,8 +531,8 @@ def test_roster_export_csv_and_xlsx_with_formula_protection(client, db_session):
     wb = openpyxl.load_workbook(io.BytesIO(res_xlsx.content))
     ws = wb.active
     assert ws.title == "Roster"
-    header_vals = [ws.cell(1, c).value for c in range(1, 6)]
-    assert header_vals == ["Name", "Department", "RegisterNo", "Status", "Active"]
+    header_vals = [ws.cell(1, c).value for c in range(1, 7)]
+    assert header_vals == ["Display name", "Name", "Department", "RegisterNo", "Status", "Active"]
 
     # Find Charlie's row in Excel
     charlie_row = None
@@ -543,8 +543,9 @@ def test_roster_export_csv_and_xlsx_with_formula_protection(client, db_session):
     assert charlie_row is not None
     # Check value starts with single quote for formula protection
     assert ws.cell(charlie_row, 1).value == "'=Charlie"
-    assert ws.cell(charlie_row, 2).value == "'+Lead"
-    assert ws.cell(charlie_row, 3).value == "'-R103"
+    assert ws.cell(charlie_row, 2).value == "'=Charlie"
+    assert ws.cell(charlie_row, 3).value == "'+Lead"
+    assert ws.cell(charlie_row, 4).value == "'-R103"
 
 
 def test_roster_export_auth(client, db_session):

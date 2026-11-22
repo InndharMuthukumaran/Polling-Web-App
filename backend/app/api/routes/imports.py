@@ -68,6 +68,7 @@ def import_group_members(
     new_fields: str | None = Form(None),
     dry_run: bool = Form(False),
     on_duplicate: str = Form("reject"),
+    display_format: str | None = Form(None),
     group: Group = Depends(require_admin_for_group),
     session: Session = Depends(get_db),
 ) -> ImportResultResponse:
@@ -102,6 +103,7 @@ def import_group_members(
         new_fields_data=new_fields_data,
         dry_run=dry_run,
         on_duplicate=on_duplicate,
+        display_format=display_format,
     )
 
     return ImportResultResponse.model_validate(result)

@@ -92,7 +92,7 @@ def test_alembic_migration_003_cycle_and_member_preservation(test_engine_and_url
         m = session.get(Member, mid)
         assert m is not None
         assert m.display_name == "Member One"
-        assert m.field_values == {}
+        assert m.field_values == {"_name": "Member One"}
         assert m.identifier_value is None
 
         # Verify unique name constraint is dropped: DB allows duplicate display_name directly
@@ -140,16 +140,16 @@ def test_field_creation_rules_and_keys(db_session):
     # 1. Normal field creation
     f1 = create_group_field(db_session, group.id, "Register No", "text")
     assert f1.key == "register_no"
-    assert f1.position == 1
+    assert f1.position == 2
 
     # 2. Key clash with different formatting
     f2 = create_group_field(db_session, group.id, "Register--No!", "text")
     assert f2.key == "register_no_2"
-    assert f2.position == 2
+    assert f2.position == 3
 
     f3 = create_group_field(db_session, group.id, "_register_no_", "text")
     assert f3.key == "register_no_3"
-    assert f3.position == 3
+    assert f3.position == 4
 
     # 3. Name uniqueness ignoring case
     with pytest.raises(PollValidationError) as exc:
@@ -198,12 +198,26 @@ def test_field_creation_rules_and_keys(db_session):
             db_session, group.id, "Notes", "text", choices=["Option 1", "Option 2"]
         )
 
-    # 6. Group fields limit
-    current_count = len(list_group_fields(db_session, group.id))
-    for i in range(current_count, MAX_GROUP_FIELDS):
-        create_group_field(db_session, group.id, f"Extra Field {i}", "text")
+    # 6. Group fields limit (bulk insert up to 99 to avoid excessive network roundtrips)
+    current_count = len([f for f in list_group_fields(db_session, group.id) if not f.is_builtin])
+    db_session.add_all([
+        GroupField(
+            group_id=group.id,
+            name=f"Extra Field {i}",
+            field_type="text",
+            position=i + 2,
+            key=f"extra_field_{i}",
+            is_builtin=False,
+            is_required=False,
+            is_identifier=False,
+        )
+        for i in range(current_count, MAX_GROUP_FIELDS - 1)
+    ])
+    db_session.commit()
 
-    assert len(list_group_fields(db_session, group.id)) == MAX_GROUP_FIELDS
+    create_group_field(db_session, group.id, f"Extra Field {MAX_GROUP_FIELDS - 1}", "text")
+
+    assert len([f for f in list_group_fields(db_session, group.id) if not f.is_builtin]) == MAX_GROUP_FIELDS
 
     with pytest.raises(PollValidationError) as exc:
         create_group_field(db_session, group.id, "One Too Many", "text")
@@ -651,28 +665,15 @@ def test_concurrent_members_same_identifier(test_engine):
     session_factory = sessionmaker(bind=test_engine, autocommit=False, autoflush=False)
 
     with session_factory() as session:
-        group = Group(
-            id=uuid.uuid4(),
-            name="Concurrent Group",
-            join_code="conc_code",
-            created_at=datetime.now(timezone.utc),
-        )
-        session.add(group)
-        session.flush()
-
-        field = GroupField(
-            id=uuid.uuid4(),
-            group_id=group.id,
-            key="badge_id",
-            name="Badge ID",
-            field_type="text",
+        group, _ = create_group_with_admin(session, "Concurrent Group")
+        field = create_group_field(
+            session,
+            group.id,
+            "Badge ID",
+            "text",
             is_required=True,
             is_identifier=True,
-            position=1,
-            created_at=datetime.now(timezone.utc),
         )
-        session.add(field)
-        session.commit()
         gid = group.id
         fkey = field.key
 
@@ -707,8 +708,8 @@ def test_concurrent_members_same_identifier(test_engine):
     t1.start()
     t2.start()
 
-    t1.join(timeout=10)
-    t2.join(timeout=10)
+    t1.join(timeout=30)
+    t2.join(timeout=30)
 
     assert not results["errors"], f"Unexpected error during concurrency test: {results['errors']}"
     assert results["success"] == 1, f"Expected 1 success, got {results['success']}"

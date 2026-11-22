@@ -8,6 +8,7 @@ from collections import Counter
 import csv
 import datetime
 import io
+import json
 import math
 import re
 from typing import Any, Sequence
@@ -30,10 +31,12 @@ from app.limits import (
 )
 from app.models import Group, GroupField, Member
 from app.services.fields import (
+    compute_display_name,
     create_group_field,
     is_blank,
     list_group_fields,
     normalize_identifier,
+    validate_display_format,
     validate_member_values_for_create,
 )
 from app.services.identity import add_members_bulk, resolve_uuid
@@ -290,7 +293,7 @@ def generate_template_file(
 ) -> tuple[bytes, str, str]:
     """Generate a spreadsheet template (.xlsx or .csv) with headers and choice dropdowns."""
     sorted_fields = sorted(fields, key=lambda f: f.position)
-    header_row = ["Name"] + [f.name for f in sorted_fields]
+    header_row = [f.name for f in sorted_fields]
 
     if file_format.lower() == "csv":
         out = io.StringIO()
@@ -309,7 +312,7 @@ def generate_template_file(
     ws.append(header_row)
 
     # Add dropdown validation for choice fields
-    for col_idx, f in enumerate(sorted_fields, start=2):
+    for col_idx, f in enumerate(sorted_fields, start=1):
         if f.field_type == "choice" and f.choices:
             col_letter = get_column_letter(col_idx)
             escaped = ",".join(str(c).replace('"', '""') for c in f.choices)
@@ -337,6 +340,7 @@ def execute_spreadsheet_import(
     new_fields_data: list[dict[str, Any]] | None = None,
     dry_run: bool = False,
     on_duplicate: str = "reject",
+    display_format: str | dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Execute bulk member import with all-or-nothing validation."""
     if on_duplicate not in ("reject", "skip"):
@@ -356,14 +360,10 @@ def execute_spreadsheet_import(
             raise PollValidationError(f"Invalid column index in mapping: '{k}'.")
         if not (0 <= col_idx < num_cols):
             raise PollValidationError(f"Column index {col_idx} out of range (0..{num_cols - 1}).")
-        col_to_target[col_idx] = v.strip()
-
-    name_cols = [c for c, t in col_to_target.items() if t == "name"]
-    if len(name_cols) == 0:
-        raise PollValidationError("Exactly one column must be mapped to 'name'.")
-    if len(name_cols) > 1:
-        raise PollValidationError("Only one column may be mapped to 'name'.")
-    name_col_idx = name_cols[0]
+        target_val = v.strip()
+        if target_val == "name":
+            target_val = "_name"
+        col_to_target[col_idx] = target_val
 
     # Check that no two columns map to the same target (other than 'skip')
     mapped_targets = [t for t in col_to_target.values() if t != "skip"]
@@ -425,14 +425,70 @@ def execute_spreadsheet_import(
 
     # Check for unknown field keys in mapping
     for t in mapped_targets:
-        if t != "name" and t not in existing_field_keys:
+        if t != "_name" and t not in existing_field_keys:
             raise PollValidationError(f"Unknown field key: '{t}'.")
 
     # Map field keys to GroupField objects
     field_map = {f.key: f for f in fields}
     id_field = next((f for f in fields if f.is_identifier), None)
 
-    # 4. Fetch existing members for duplicate checks
+    # 4. Resolve and validate display format
+    active_format: dict[str, Any] = group.display_format
+    format_was_provided = False
+
+    if display_format is not None:
+        format_was_provided = True
+        if isinstance(display_format, str):
+            try:
+                parsed_format = json.loads(display_format)
+            except Exception:
+                raise PollValidationError("display_format must be a valid JSON object.")
+        elif isinstance(display_format, dict):
+            parsed_format = display_format
+        else:
+            raise PollValidationError("display_format must be a valid JSON object.")
+
+        if not isinstance(parsed_format, dict):
+            raise PollValidationError("display_format must be a valid JSON object.")
+
+        parts = parsed_format.get("parts")
+        if not isinstance(parts, list):
+            raise PollValidationError("display_format['parts'] must be a list.")
+
+        resolved_parts: list[str] = []
+        for p in parts:
+            p_str = str(p).strip()
+            if p_str == "name":
+                resolved_parts.append("_name")
+            elif p_str.startswith("col:"):
+                col_part = p_str[4:].strip()
+                try:
+                    c_idx = int(col_part)
+                except ValueError:
+                    raise PollValidationError(f"Invalid column index in display_format: '{p_str}'.")
+                if c_idx in col_to_target and col_to_target[c_idx] != "skip":
+                    resolved_parts.append(col_to_target[c_idx])
+                else:
+                    raise PollValidationError(f"Column '{p_str}' in display_format was not mapped to a field.")
+            else:
+                resolved_parts.append(p_str)
+
+        active_format = {
+            "parts": resolved_parts,
+            "separator": parsed_format.get("separator", " - "),
+        }
+        validate_display_format(active_format, fields)
+    else:
+        validate_display_format(active_format, fields)
+
+    # If built-in field is not in active display_format, relax its is_required
+    builtin_field = next((f for f in fields if f.key == "_name" or f.is_builtin), None)
+    if builtin_field and "_name" not in active_format.get("parts", []):
+        builtin_field.is_required = False
+        if format_was_provided and not dry_run:
+            session.add(builtin_field)
+
+    # 5. Fetch existing members for duplicate checks
     existing_members = list(
         session.scalars(select(Member).where(Member.group_id == group.id)).all()
     )
@@ -441,7 +497,7 @@ def execute_spreadsheet_import(
         m.identifier_value for m in existing_members if m.identifier_value is not None
     }
 
-    # 5. Row-by-row validation
+    # 6. Row-by-row validation
     errors: list[dict[str, Any]] = []
     seen_identifiers_in_file: dict[str, int] = {}
     seen_names_in_file: dict[str, int] = {}
@@ -453,32 +509,10 @@ def execute_spreadsheet_import(
     for sheet_row_num, cells in data_rows:
         row_has_error = False
 
-        # Display name
-        raw_name = cells[name_col_idx]
-        conv_name = convert_cell_value(raw_name)
-        if is_blank(conv_name):
-            errors.append({
-                "row": sheet_row_num,
-                "field": "Name",
-                "message": "Member display_name cannot be blank.",
-            })
-            row_has_error = True
-            clean_name = ""
-        elif len(conv_name) > 255:
-            errors.append({
-                "row": sheet_row_num,
-                "field": "Name",
-                "message": "Member display_name cannot exceed 255 characters.",
-            })
-            row_has_error = True
-            clean_name = conv_name[:255]
-        else:
-            clean_name = conv_name
-
         # Extract values for mapped columns
         raw_values: dict[str, Any] = {}
         for c_idx, target in col_to_target.items():
-            if target in ("name", "skip"):
+            if target == "skip":
                 continue
             f_obj = field_map.get(target)
             f_type = f_obj.field_type if f_obj else None
@@ -501,6 +535,19 @@ def execute_spreadsheet_import(
                 errors.append({
                     "row": sheet_row_num,
                     "field": "values",
+                    "message": exc.message,
+                })
+
+        # Compute display name
+        computed_name = ""
+        if not row_has_error:
+            try:
+                computed_name = compute_display_name(active_format, cleaned_vals, field_map)
+            except PollValidationError as exc:
+                row_has_error = True
+                errors.append({
+                    "row": sheet_row_num,
+                    "field": "display_name",
                     "message": exc.message,
                 })
 
@@ -534,39 +581,39 @@ def execute_spreadsheet_import(
                         else:
                             is_row_skipped = True
             else:
-                # Group has NO identifier field: display name must be unique
-                if clean_name:
-                    if clean_name in seen_names_in_file:
-                        earlier_row = seen_names_in_file[clean_name]
+                # Group has NO identifier field: computed display name must be unique
+                if computed_name in seen_names_in_file:
+                    earlier_row = seen_names_in_file[computed_name]
+                    errors.append({
+                        "row": sheet_row_num,
+                        "field": "display_name",
+                        "message": f"Duplicate name '{computed_name}' (first seen on row {earlier_row}).",
+                    })
+                    row_has_error = True
+                else:
+                    seen_names_in_file[computed_name] = sheet_row_num
+
+                if not row_has_error and computed_name in existing_names:
+                    if on_duplicate == "reject":
                         errors.append({
                             "row": sheet_row_num,
-                            "field": "Name",
-                            "message": f"Duplicate name '{clean_name}' (first seen on row {earlier_row}).",
+                            "field": "display_name",
+                            "message": f"Member with name '{computed_name}' already exists in group.",
                         })
                         row_has_error = True
                     else:
-                        seen_names_in_file[clean_name] = sheet_row_num
-
-                    if not row_has_error and clean_name in existing_names:
-                        if on_duplicate == "reject":
-                            errors.append({
-                                "row": sheet_row_num,
-                                "field": "Name",
-                                "message": f"Member with name '{clean_name}' already exists in group.",
-                            })
-                            row_has_error = True
-                        else:
-                            is_row_skipped = True
+                        is_row_skipped = True
 
         if is_row_skipped:
             rows_skipped += 1
         elif not row_has_error:
             members_to_add_data.append({
-                "display_name": clean_name,
+                "display_name": computed_name,
                 "values": cleaned_vals,
             })
+            existing_names.add(computed_name)
 
-    # 6. If any error occurred, abort and report
+    # 7. If any error occurred, abort and report
     if errors:
         session.rollback()
         err_count = len(errors)
@@ -579,7 +626,7 @@ def execute_spreadsheet_import(
 
     rows_added = len(members_to_add_data)
 
-    # 7. Dry run check
+    # 8. Dry run check
     if dry_run:
         session.rollback()
         return {
@@ -588,15 +635,21 @@ def execute_spreadsheet_import(
             "rows_added": rows_added,
             "rows_skipped": rows_skipped,
             "fields_created": fields_created_names,
+            "display_format_saved": False,
             "errors": [],
         }
 
-    # 8. Save members
+    # 9. Save display format and members
     try:
+        if format_was_provided:
+            group.display_format = active_format
+            session.add(group)
+            session.flush()
+
         if rows_added > 0:
             add_members_bulk(session, group.id, members_data=members_to_add_data)
         else:
-            # Commit newly created fields even if 0 members were added
+            # Commit newly created fields and display format even if 0 members were added
             session.commit()
     except Exception:
         session.rollback()
@@ -608,5 +661,6 @@ def execute_spreadsheet_import(
         "rows_added": rows_added,
         "rows_skipped": rows_skipped,
         "fields_created": fields_created_names,
+        "display_format_saved": format_was_provided,
         "errors": [],
     }
