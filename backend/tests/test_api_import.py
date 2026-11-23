@@ -507,7 +507,10 @@ def test_import_new_fields_creation(client):
     # Check fields and members exist
     res_f = client.get(f"/api/v1/groups/{group_id}/fields", headers={"X-Admin-Token": token})
     f_list = res_f.json()
-    assert len(f_list) == 2
+    # Every group also has the built-in Name field (Part C1), so 2 created fields + 1 built-in.
+    assert len(f_list) == 3
+    custom_fields = [f for f in f_list if not f["is_builtin"]]
+    assert len(custom_fields) == 2
     reg_field = next(f for f in f_list if f["name"] == "Register No")
     assert reg_field["is_identifier"] is True
 
@@ -551,9 +554,11 @@ def test_import_new_fields_identifier_on_group_with_members_fails(client):
     assert res_imp.status_code == 422
     assert "Cannot create a new field as the identifier while members exist" in res_imp.json()["error"]["message"]
 
-    # Verify no new field was created
+    # Verify no new field was created (only the built-in Name field remains, Part C1)
     res_f = client.get(f"/api/v1/groups/{group_id}/fields", headers={"X-Admin-Token": token})
-    assert len(res_f.json()) == 0
+    f_list = res_f.json()
+    assert len(f_list) == 1
+    assert f_list[0]["is_builtin"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -573,7 +578,9 @@ def test_mapping_validation_errors(client):
     ]
     csv_bytes = make_csv(rows)
 
-    # 1. No name column
+    # 1. No column mapped to the built-in Name field: nothing fills the display name,
+    # so every row ends up with an empty display name (Part C1 removed the old
+    # "exactly one column must map to name" rule in favour of this check).
     res1 = client.post(
         f"/api/v1/groups/{group_id}/members/import",
         headers={"X-Admin-Token": token},
@@ -581,7 +588,7 @@ def test_mapping_validation_errors(client):
         data={"mapping": json.dumps({"0": dept_key, "1": "skip"})},
     )
     assert res1.status_code == 422
-    assert "Exactly one column must be mapped to 'name'" in res1.json()["error"]["message"]
+    assert "Display name is empty" in res1.json()["error"]["message"]
 
     # 2. Two columns mapped to same target
     res2 = client.post(
